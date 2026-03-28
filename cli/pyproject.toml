@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "envbasis-cli"
+version = "0.1.0"
+description = "Thin authenticated CLI client for the EnvBasis backend API."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.28.1",
+  "keyring>=25.6.0",
+  "pydantic>=2.11.0",
+  "python-dotenv>=1.1.0",
+  "rich>=14.0.0",
+  "typer>=0.16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+  "respx>=0.22.0",
+]
+
+[project.scripts]
+envbasis = "envbasis_cli.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/envbasis_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

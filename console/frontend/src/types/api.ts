@@ -1,0 +1,132 @@
+// Core entity types
+
+export interface User {
+  id: string;
+  email: string;
+  created_at: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  role: 'owner' | 'member';
+  environment_count: number;
+  member_count: number;
+  runtime_token_count: number;
+  last_activity_at: string | null;
+  created_at: string;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  project_id: string;
+  created_at: string;
+}
+
+export interface Secret {
+  key: string;
+  value: string;
+  version: number;
+  environment_id: string;
+  environment?: string;
+  updated_at: string;
+  updated_by_email: string | null;
+}
+
+export interface SecretListResponse {
+  secrets: Secret[];
+}
+
+export interface PushSecretsResponse {
+  changed: number;
+  unchanged: number;
+}
+
+export interface PullSecretsResponse {
+  secrets: Record<string, string>;
+}
+
+export interface Member {
+  user_id: string;
+  email: string;
+  role: 'owner' | 'member';
+  can_push_pull_secrets: boolean;
+  joined_at: string;
+}
+
+export interface RuntimeToken {
+  id: string;
+  name: string;
+  environment_id: string;
+  created_by: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  plaintext_token?: string;
+}
+
+export interface RuntimeTokenShare {
+  id: string;
+  email: string;
+  shared_at: string;
+}
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  actor_email: string;
+  environment_name: string | null;
+  project_id: string | null;
+  source: 'project' | 'cli_auth';
+  metadata_json: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface SecretStats {
+  total_secret_count: number;
+  environments: EnvironmentSecretStats[];
+}
+
+export interface EnvironmentSecretStats {
+  environment_id: string;
+  environment_name: string;
+  secret_count: number;
+  last_updated_at: string | null;
+  last_activity_at: string | null;
+}
+
+// CLI Auth types
+
+export interface CliAuthRequest {
+  user_code: string;
+  status: string;
+  client_name?: string;
+  device_name?: string;
+  platform?: string;
+  cli_version?: string;
+  requested_scopes?: string[];
+  requested_at?: string;
+  expires_at?: string;
+  expires_in?: number;
+  approved_by_email?: string;
+}
+
+// API Error
+
+export interface ApiErrorDetails {
+  detail?: {
+    message?: string;
+    code?: string;
+    shared_tokens?: Array<{ id: string; name: string }>;
+    revealed_shared_tokens?: Array<{ id: string; name: string }>;
+  };
+}
+
+// Request options
+
+export interface RequestOptions {
+  signal?: AbortSignal;
+}
