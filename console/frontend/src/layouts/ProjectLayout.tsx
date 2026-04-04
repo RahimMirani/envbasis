@@ -4,7 +4,7 @@ import TopBar from '../components/TopBar';
 import Sidebar from '../components/Sidebar';
 import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
-import { getProject, listEnvironments, getProjectSecretStats } from '../lib/api';
+import { getProject, listEnvironments, getProjectSecretStats, listProjects } from '../lib/api';
 import type { Project, Environment, SecretStats } from '../types/api';
 
 export default function ProjectLayout() {
@@ -13,6 +13,7 @@ export default function ProjectLayout() {
   const { accessToken, apiConfigError } = useAuth();
 
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [secretStats, setSecretStats] = useState<SecretStats | null>(null);
   const [isSecretStatsLoading, setIsSecretStatsLoading] = useState(true);
@@ -42,9 +43,10 @@ export default function ProjectLayout() {
       setError(null);
 
       try {
-        const [project, envList] = await Promise.all([
+        const [project, envList, projectList] = await Promise.all([
           getProject(projectId!, accessToken!, { signal: controller.signal }),
           listEnvironments(projectId!, accessToken!, { signal: controller.signal }),
+          listProjects(accessToken!, { signal: controller.signal }).catch(() => []),
         ]);
 
         if (!isActive) {
@@ -52,6 +54,7 @@ export default function ProjectLayout() {
         }
 
         setCurrentProject(project);
+        setProjects(projectList);
         setEnvironments(envList);
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
@@ -118,6 +121,16 @@ export default function ProjectLayout() {
     };
   }, [accessToken, apiConfigError, projectId]);
 
+  useEffect(() => {
+    if (currentEnv === 'all') {
+      return;
+    }
+
+    if (!environments.some((environment) => environment.name === currentEnv)) {
+      setCurrentEnv('all');
+    }
+  }, [currentEnv, environments]);
+
   const refreshSecretStats = useCallback(async () => {
     if (!accessToken || !projectId) {
       return;
@@ -137,16 +150,98 @@ export default function ProjectLayout() {
 
   const handleEnvironmentCreated = (environment: Environment) => {
     setEnvironments((current) => [...current, environment]);
-    if (currentProject) {
-      setCurrentProject({
-        ...currentProject,
-        environment_count: (currentProject.environment_count || 0) + 1,
-      });
-    }
+    setSecretStats((current) =>
+      current
+        ? {
+            ...current,
+            environments: [
+              ...current.environments,
+              {
+                environment_id: environment.id,
+                environment_name: environment.name,
+                secret_count: 0,
+                last_updated_at: null,
+                last_activity_at: null,
+              },
+            ],
+          }
+        : current
+    );
+    setCurrentProject((current) =>
+      current
+        ? {
+            ...current,
+            environment_count: (current.environment_count || 0) + 1,
+          }
+        : current
+    );
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === environment.project_id
+          ? {
+              ...project,
+              environment_count: (project.environment_count || 0) + 1,
+            }
+          : project
+      )
+    );
   };
 
   const handleProjectUpdated = (updated: Project) => {
     setCurrentProject(updated);
+    setProjects((current) =>
+      current.map((project) => (project.id === updated.id ? updated : project))
+    );
+  };
+
+  const handleMemberCountChanged = (delta: number) => {
+    if (!delta) {
+      return;
+    }
+
+    setCurrentProject((current) =>
+      current
+        ? {
+            ...current,
+            member_count: Math.max(0, (current.member_count || 0) + delta),
+          }
+        : current
+    );
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              member_count: Math.max(0, (project.member_count || 0) + delta),
+            }
+          : project
+      )
+    );
+  };
+
+  const handleRuntimeTokenCountChanged = (delta: number) => {
+    if (!delta) {
+      return;
+    }
+
+    setCurrentProject((current) =>
+      current
+        ? {
+            ...current,
+            runtime_token_count: Math.max(0, (current.runtime_token_count || 0) + delta),
+          }
+        : current
+    );
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              runtime_token_count: Math.max(0, (project.runtime_token_count || 0) + delta),
+            }
+          : project
+      )
+    );
   };
 
   if (isLoading) {
@@ -174,7 +269,13 @@ export default function ProjectLayout() {
         onEnvChange={setCurrentEnv}
       />
       <div className="project-layout-body">
-        <Sidebar basePath={projectBasePath} isOwner={currentProject.role === 'owner'} />
+        <Sidebar
+          basePath={projectBasePath}
+          projectName={currentProject.name}
+          projectRole={currentProject.role}
+          currentProjectId={currentProject.id}
+          projects={projects}
+        />
         <main className="project-layout-main">
           <Outlet
             context={{
@@ -188,6 +289,8 @@ export default function ProjectLayout() {
               refreshSecretStats,
               onEnvironmentCreated: handleEnvironmentCreated,
               onProjectUpdated: handleProjectUpdated,
+              onMemberCountChanged: handleMemberCountChanged,
+              onRuntimeTokenCountChanged: handleRuntimeTokenCountChanged,
             }}
           />
         </main>
