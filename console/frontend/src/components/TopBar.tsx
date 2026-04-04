@@ -1,5 +1,5 @@
-import { Link, useNavigate } from 'react-router-dom';
-import { ChevronDown, LogOut } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { LogOut } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
 import type { Environment } from '../types/api';
@@ -17,9 +17,22 @@ export default function TopBar({
   currentEnv = 'all',
   onEnvChange,
 }: TopBarProps) {
+  const pageTitles: Record<string, string> = {
+    overview: 'Overview',
+    secrets: 'Secrets',
+    environments: 'Environments',
+    team: 'Team',
+    tokens: 'Runtime Tokens',
+    audit: 'Audit Logs',
+    settings: 'Settings',
+  };
+  const location = useLocation();
   const navigate = useNavigate();
   const { currentUser, authUser, signOut } = useAuth();
   const user = currentUser ?? authUser;
+  const pathSegments = location.pathname.split('/').filter(Boolean);
+  const activeSegment = pathSegments[pathSegments.length - 1] ?? '';
+  const pageTitle = pageTitles[activeSegment] ?? null;
 
   const handleSignOut = async () => {
     await signOut();
@@ -36,6 +49,12 @@ export default function TopBar({
           <>
             <span className="topbar-separator">/</span>
             <span className="topbar-project mono">{projectName}</span>
+            {pageTitle ? (
+              <>
+                <span className="topbar-separator">/</span>
+                <span className="topbar-page">{pageTitle}</span>
+              </>
+            ) : null}
           </>
         )}
       </div>
@@ -56,7 +75,6 @@ export default function TopBar({
                 </option>
               ))}
             </select>
-            <ChevronDown size={14} className="topbar-env-icon" />
           </div>
         )}
 
