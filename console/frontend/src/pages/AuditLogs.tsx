@@ -12,6 +12,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
 import { listUnifiedAuditLogs } from '../lib/api';
 import {
@@ -159,10 +160,11 @@ export default function AuditLogsPage() {
       )}
 
       {isLoading ? (
-        <div className="empty-state">
-          <h3>Loading audit logs</h3>
-          <p>Fetching the combined project and CLI activity trail.</p>
-        </div>
+        <DashboardLoader
+          compact
+          title="Loading audit logs"
+          description="Fetching the combined project and CLI activity trail."
+        />
       ) : logs.length === 0 ? (
         <div className="empty-state">
           <h3>No audit events yet</h3>

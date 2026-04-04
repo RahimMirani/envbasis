@@ -11,6 +11,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
@@ -31,6 +32,7 @@ interface OutletContextType {
   currentEnv: string;
   environments: Environment[];
   canManageProject: boolean;
+  onRuntimeTokenCountChanged: (delta: number) => void;
 }
 
 interface ShareState {
@@ -111,8 +113,13 @@ function formatCreateError(error: ApiError | Error | null): string {
 }
 
 export default function TokensPage() {
-  const { currentProject, currentEnv, environments, canManageProject } =
-    useOutletContext<OutletContextType>();
+  const {
+    currentProject,
+    currentEnv,
+    environments,
+    canManageProject,
+    onRuntimeTokenCountChanged,
+  } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
   const [tokens, setTokens] = useState<RuntimeToken[]>([]);
   const [membersById, setMembersById] = useState<Record<string, Member>>({});
@@ -256,6 +263,7 @@ export default function TokensPage() {
       );
 
       await reloadTokens();
+      onRuntimeTokenCountChanged(1);
       setShowCreate(false);
       setCopiedToken(false);
       setTokenValueModal({
@@ -301,6 +309,7 @@ export default function TokensPage() {
     try {
       await revokeRuntimeToken(token.id, accessToken!);
       await reloadTokens();
+      onRuntimeTokenCountChanged(-1);
       if (shareState.token?.id === token.id) {
         setShareState({
           token: null,
@@ -473,10 +482,11 @@ export default function TokensPage() {
           <p>Create an environment before issuing runtime tokens.</p>
         </div>
       ) : isLoading ? (
-        <div className="empty-state">
-          <h3>Loading runtime tokens</h3>
-          <p>Fetching tokens available to this project membership.</p>
-        </div>
+        <DashboardLoader
+          compact
+          title="Loading runtime tokens"
+          description="Fetching tokens available to this project membership."
+        />
       ) : visibleTokens.length === 0 ? (
         <div className="empty-state">
           <h3>No runtime tokens found</h3>

@@ -1,4 +1,5 @@
 import { ReactNode, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -34,26 +35,29 @@ export default function Modal({ isOpen, onClose, title, children, footer }: Moda
     return null;
   }
 
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal"
+        className="modal animate-in"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
       >
         <div className="modal-header">
-          <h2 id="modal-title" className="modal-title">
-            {title}
-          </h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close modal">
-            <X size={18} />
+          <h3 id="modal-title">{title}</h3>
+          <button
+            className="btn btn-ghost btn-icon btn-sm"
+            onClick={onClose}
+            aria-label="Close modal"
+          >
+            <X size={16} />
           </button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
