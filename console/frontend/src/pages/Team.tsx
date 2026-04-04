@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Shield, UserPlus, UserX } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import { inviteMember, listMembers, revokeMember, updateMemberSecretAccess } from '../lib/api';
@@ -12,6 +13,7 @@ import { ApiError } from '../lib/api';
 interface OutletContextType {
   currentProject: Project;
   canManageProject: boolean;
+  onMemberCountChanged: (delta: number) => void;
 }
 
 interface RevokeConflict {
@@ -47,7 +49,8 @@ function formatInviteError(error: ApiError | Error | null): string {
 }
 
 export default function TeamPage() {
-  const { currentProject, canManageProject } = useOutletContext<OutletContextType>();
+  const { currentProject, canManageProject, onMemberCountChanged } =
+    useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
   const [members, setMembers] = useState<Member[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -139,6 +142,7 @@ export default function TeamPage() {
       });
 
       setMembers((currentMembers) => [...currentMembers, createdMember]);
+      onMemberCountChanged(1);
       setShowInvite(false);
       setInviteEmail('');
       setInviteCanPushPullSecrets(true);
@@ -185,6 +189,7 @@ export default function TeamPage() {
       setMembers((currentMembers) =>
         currentMembers.filter((currentMember) => currentMember.user_id !== member.user_id)
       );
+      onMemberCountChanged(-1);
       setRevokeConflict(null);
     } catch (revokeErrorValue) {
       const apiError = revokeErrorValue as ApiError;
@@ -240,10 +245,7 @@ export default function TeamPage() {
       )}
 
       {isLoading ? (
-        <div className="empty-state">
-          <h3>Loading team</h3>
-          <p>Fetching project members.</p>
-        </div>
+        <DashboardLoader compact title="Loading team" description="Fetching project members." />
       ) : members.length === 0 ? (
         <div className="empty-state">
           <h3>No members yet</h3>
