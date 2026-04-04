@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import CodeBlock from '../components/CodeBlock';
+import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
@@ -67,7 +68,7 @@ function getEnvironmentBadgeClass(environmentName: string): string {
 export default function SecretsPage() {
   const { currentEnv, currentProject, environments, refreshSecretStats } =
     useOutletContext<OutletContextType>();
-  const { accessToken, apiConfigError, currentUser } = useAuth();
+  const { accessToken, apiConfigError, currentUser, authUser } = useAuth();
   const [search, setSearch] = useState('');
   const [secrets, setSecrets] = useState<SecretWithEnv[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -106,6 +107,8 @@ export default function SecretsPage() {
     return environments.filter((environment) => environment.name === currentEnv);
   }, [currentEnv, environments]);
 
+  const membershipEmail = currentUser?.email ?? authUser?.email ?? null;
+
   useEffect(() => {
     if (!accessToken || apiConfigError) {
       return undefined;
@@ -116,8 +119,8 @@ export default function SecretsPage() {
       return undefined;
     }
 
-    if (!currentUser?.email) {
-      setSecretAccessState('checking');
+    if (!membershipEmail) {
+      setSecretAccessState('enabled');
       return undefined;
     }
 
@@ -138,7 +141,7 @@ export default function SecretsPage() {
         const membership = members.find(
           (member) =>
             String(member.email || '').toLowerCase() ===
-            String(currentUser?.email || '').toLowerCase()
+            String(membershipEmail || '').toLowerCase()
         );
 
         setSecretAccessState(
@@ -157,7 +160,7 @@ export default function SecretsPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, currentProject.role, currentUser?.email]);
+  }, [accessToken, apiConfigError, currentProject.id, currentProject.role, membershipEmail]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -693,10 +696,11 @@ export default function SecretsPage() {
           <p>Create an environment first before adding secrets.</p>
         </div>
       ) : isLoading ? (
-        <div className="empty-state">
-          <h3>Loading secrets</h3>
-          <p>Fetching secrets for the selected environment scope.</p>
-        </div>
+        <DashboardLoader
+          compact
+          title="Loading secrets"
+          description="Fetching secrets for the selected environment scope."
+        />
       ) : filteredSecrets.length === 0 ? (
         <div className="empty-state">
           <h3>No secrets found</h3>
