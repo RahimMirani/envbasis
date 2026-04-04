@@ -19,6 +19,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import CodeBlock from '../components/CodeBlock';
+import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs } from '../lib/api';
 import {
@@ -217,63 +218,59 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      <div className="overview-grid">
-        <div className="overview-section">
-          <div className="overview-section-header">
-            <h3>Recent Activity</h3>
-            {currentProject.role === 'owner' && (
+      <div className={`overview-grid ${currentProject.role !== 'owner' ? 'overview-grid-member' : ''}`}>
+        {currentProject.role === 'owner' && (
+          <div className="overview-section">
+            <div className="overview-section-header">
+              <h3>Recent Activity</h3>
               <button
                 className="btn btn-ghost btn-sm"
                 onClick={() => navigate(`${projectBasePath}/audit`)}
               >
                 View All <ArrowUpRight size={12} />
               </button>
-            )}
-          </div>
-          <div className="card">
-            {currentProject.role !== 'owner' ? (
-              <div className="empty-state">
-                <h3>Audit logs are owner-only</h3>
-                <p>Recent activity is only available to project owners.</p>
-              </div>
-            ) : isLoading ? (
-              <div className="empty-state">
-                <h3>Loading activity</h3>
-                <p>Fetching recent project actions.</p>
-              </div>
-            ) : activityLogs.length === 0 ? (
-              <div className="empty-state">
-                <h3>No activity yet</h3>
-                <p>Actions will appear here as the project changes.</p>
-              </div>
-            ) : (
-              <div className="activity-list">
-                {activityLogs.map((log) => {
-                  const iconKey = getAuditIconKey(log.action);
-                  const Icon = activityIcons[iconKey] || Terminal;
-                  return (
-                    <div className="activity-item" key={log.id}>
-                      <div
-                        className={`activity-icon activity-icon-${getAuditColor(log.action)}`}
-                      >
-                        <Icon size={14} />
+            </div>
+            <div className="card">
+              {isLoading ? (
+                <DashboardLoader
+                  compact
+                  title="Loading activity"
+                  description="Fetching recent project actions."
+                />
+              ) : activityLogs.length === 0 ? (
+                <div className="empty-state">
+                  <h3>No activity yet</h3>
+                  <p>Actions will appear here as the project changes.</p>
+                </div>
+              ) : (
+                <div className="activity-list">
+                  {activityLogs.map((log) => {
+                    const iconKey = getAuditIconKey(log.action);
+                    const Icon = activityIcons[iconKey] || Terminal;
+                    return (
+                      <div className="activity-item" key={log.id}>
+                        <div
+                          className={`activity-icon activity-icon-${getAuditColor(log.action)}`}
+                        >
+                          <Icon size={14} />
+                        </div>
+                        <div className="activity-content">
+                          <span className="activity-text">
+                            {getUserDisplayName({ email: log.actor_email })}{' '}
+                            {getAuditActionLabel(log.action)}
+                          </span>
+                          <span className="activity-time">
+                            {getAuditDetails(log) || formatRelativeTime(log.created_at)}
+                          </span>
+                        </div>
                       </div>
-                      <div className="activity-content">
-                        <span className="activity-text">
-                          {getUserDisplayName({ email: log.actor_email })}{' '}
-                          {getAuditActionLabel(log.action)}
-                        </span>
-                        <span className="activity-time">
-                          {getAuditDetails(log) || formatRelativeTime(log.created_at)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="overview-right-col">
           {!allDone && (
@@ -311,6 +308,26 @@ export default function OverviewPage() {
             </div>
           )}
 
+          {currentProject.role !== 'owner' && (
+            <div className="overview-section">
+              <div className="overview-section-header">
+                <h3>Access</h3>
+              </div>
+              <div className="card onboarding-card">
+                <div className="onboarding-list">
+                  <div className="onboarding-item">
+                    <CheckCircle2 size={16} />
+                    <span>You can view project metadata and any resources shared with you.</span>
+                  </div>
+                  <div className="onboarding-item">
+                    <CheckCircle2 size={16} />
+                    <span>Project audit logs remain visible to owners only.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="overview-section">
             <div className="overview-section-header">
               <h3>
@@ -323,9 +340,9 @@ export default function OverviewPage() {
               <CodeBlock
                 commands={[
                   { cmd: 'envbasis', args: 'login' },
-                  { cmd: 'envbasis', args: `pull --env ${cliEnvironmentName}` },
-                  { cmd: 'envbasis', args: `push --env ${cliEnvironmentName}` },
-                  { cmd: 'envbasis', args: 'run -- npm start' },
+                  { cmd: 'envbasis', args: `env use ${cliEnvironmentName}` },
+                  { cmd: 'envbasis', args: 'pull --file .env' },
+                  { cmd: 'envbasis', args: 'push --file .env' },
                 ]}
               />
             </div>
