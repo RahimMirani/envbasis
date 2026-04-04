@@ -42,10 +42,10 @@ export default function AuthCallbackPage() {
 
   if (error) {
     return (
-      <div className="auth-callback-page">
-        <div className="auth-callback-card">
-          <h1 className="auth-callback-title">Authentication Error</h1>
-          <p className="auth-callback-error">{error}</p>
+      <div className="auth-callback">
+        <div className="auth-callback-error">
+          <h2>Authentication Error</h2>
+          <p>{error}</p>
           <button className="btn btn-primary" onClick={() => navigate('/login', { replace: true })}>
             Back to Login
           </button>
@@ -55,10 +55,10 @@ export default function AuthCallbackPage() {
   }
 
   return (
-    <div className="auth-callback-page">
-      <div className="auth-callback-card">
-        <h1 className="auth-callback-title">Completing sign-in...</h1>
-        <p className="auth-callback-subtitle">Please wait while we verify your session.</p>
+    <div className="auth-callback">
+      <div className="auth-callback-loading">
+        <div className="auth-callback-spinner" aria-hidden="true" />
+        <p className="auth-callback-text">Please wait while we verify your session.</p>
       </div>
     </div>
   );
