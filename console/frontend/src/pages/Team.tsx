@@ -4,10 +4,17 @@ import { useOutletContext } from 'react-router-dom';
 import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
-import { inviteMember, listMembers, revokeMember, updateMemberSecretAccess } from '../lib/api';
+import {
+  inviteMember,
+  listMembers,
+  listProjectInvitations,
+  revokeMember,
+  revokeProjectInvitation,
+  updateMemberSecretAccess,
+} from '../lib/api';
 import { formatDate } from '../lib/format';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
-import type { Project, Member, ApiErrorDetails } from '../types/api';
+import type { Project, Member, ApiErrorDetails, ProjectInvitation } from '../types/api';
 import { ApiError } from '../lib/api';
 
 interface OutletContextType {
@@ -36,8 +43,12 @@ function formatInviteError(error: ApiError | Error | null): string {
   }
 
   if (error instanceof ApiError) {
-    if (error.status === 404) {
-      return 'User not found. They need to sign in once before you can invite them.';
+    if (error.status === 429) {
+      const d = (error.details as ApiErrorDetails)?.detail;
+      if (typeof d === 'object' && d && 'message' in d && typeof (d as { message?: string }).message === 'string') {
+        return (d as { message: string }).message;
+      }
+      return error.message || 'Too many invite emails sent. Please wait for the cooldown.';
     }
 
     if (error.status === 409) {
@@ -62,6 +73,8 @@ export default function TeamPage() {
   const [isInviting, setIsInviting] = useState(false);
   const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
   const [revokeConflict, setRevokeConflict] = useState<RevokeConflict | null>(null);
+  const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>([]);
+  const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken) {
@@ -82,15 +95,23 @@ export default function TeamPage() {
       setError(null);
 
       try {
-        const response = await listMembers(currentProject.id, accessToken!, {
-          signal: controller.signal,
-        });
+        const [response, invites] = await Promise.all([
+          listMembers(currentProject.id, accessToken!, {
+            signal: controller.signal,
+          }),
+          canManageProject
+            ? listProjectInvitations(currentProject.id, accessToken!, {
+                signal: controller.signal,
+              })
+            : Promise.resolve([] as ProjectInvitation[]),
+        ]);
 
         if (!isActive) {
           return;
         }
 
         setMembers(response);
+        setPendingInvites(invites);
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -98,6 +119,7 @@ export default function TeamPage() {
 
         setError((loadError as Error).message || 'Failed to load team members.');
         setMembers([]);
+        setPendingInvites([]);
       } finally {
         if (isActive) {
           setIsLoading(false);
@@ -111,7 +133,7 @@ export default function TeamPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id]);
+  }, [accessToken, apiConfigError, currentProject.id, canManageProject]);
 
   const closeInviteModal = () => {
     if (isInviting) {
@@ -135,18 +157,23 @@ export default function TeamPage() {
     setInviteError(null);
 
     try {
-      const createdMember = await inviteMember(currentProject.id, accessToken!, {
+      const result = await inviteMember(currentProject.id, accessToken!, {
         email,
         role: 'member',
         can_push_pull_secrets: inviteCanPushPullSecrets,
       });
 
-      setMembers((currentMembers) => [...currentMembers, createdMember]);
-      onMemberCountChanged(1);
+      setPendingInvites((cur) => {
+        const others = cur.filter((p) => p.id !== result.invitation.id);
+        return [result.invitation, ...others];
+      });
+      if (!result.email_sent && result.message) {
+        setError(result.message);
+      }
+      setInviteError(null);
       setShowInvite(false);
       setInviteEmail('');
       setInviteCanPushPullSecrets(true);
-      setInviteError(null);
     } catch (inviteErrorValue) {
       setInviteError(formatInviteError(inviteErrorValue as ApiError));
     } finally {
@@ -173,6 +200,22 @@ export default function TeamPage() {
       setError((toggleError as Error).message || 'Failed to update secret access.');
     } finally {
       setActiveMemberEmail(null);
+    }
+  };
+
+  const handleRevokePendingInvite = async (invitation: ProjectInvitation) => {
+    if (!accessToken) {
+      return;
+    }
+    setRevokingInviteId(invitation.id);
+    setError(null);
+    try {
+      await revokeProjectInvitation(currentProject.id, invitation.id, accessToken);
+      setPendingInvites((cur) => cur.filter((p) => p.id !== invitation.id));
+    } catch (revErr) {
+      setError((revErr as Error).message || 'Failed to revoke invitation.');
+    } finally {
+      setRevokingInviteId(null);
     }
   };
 
@@ -244,12 +287,59 @@ export default function TeamPage() {
         </div>
       )}
 
+      {canManageProject && pendingInvites.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <h3 className="page-subtitle" style={{ margin: '0 0 12px' }}>
+            Pending invitations
+          </h3>
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Secrets access</th>
+                  <th>Expires</th>
+                  <th>Sent</th>
+                  <th style={{ width: 100 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingInvites.map((inv) => (
+                  <tr key={inv.id}>
+                    <td className="mono">{inv.email}</td>
+                    <td>{inv.can_push_pull_secrets ? 'Yes' : 'No'}</td>
+                    <td className="text-secondary">{formatDate(inv.expires_at)}</td>
+                    <td className="text-secondary">{inv.send_count}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm btn-danger-subtle"
+                        onClick={() => handleRevokePendingInvite(inv)}
+                        disabled={revokingInviteId === inv.id}
+                      >
+                        Revoke
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {pendingInvites.some((p) => p.cooldown_until) && (
+            <p className="text-secondary" style={{ fontSize: 13, marginTop: 8 }}>
+              After two invite emails to the same address, this project must wait 5 days before sending
+              more.
+            </p>
+          )}
+        </div>
+      )}
+
       {isLoading ? (
         <DashboardLoader compact title="Loading team" description="Fetching project members." />
       ) : members.length === 0 ? (
         <div className="empty-state">
           <h3>No members yet</h3>
-          <p>Invite teammates after they have authenticated once with the app.</p>
+          <p>Invite teammates by email. They will accept from the email link or their notifications.</p>
           {canManageProject && (
             <button className="btn btn-primary" onClick={() => setShowInvite(true)}>
               <UserPlus size={14} />
@@ -379,7 +469,8 @@ export default function TeamPage() {
           </p>
         )}
         <p className="invite-hint">
-          The user must authenticate once before they can be invited to a project.
+          The recipient gets an email with a link (if SMTP is configured). They can also see pending
+          invites in their dashboard notifications.
         </p>
       </Modal>
 
