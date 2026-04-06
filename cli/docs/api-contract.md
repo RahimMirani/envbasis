@@ -32,9 +32,18 @@ This file captures the backend surface the CLI is designed against. It is a type
 ## Members
 
 - `GET /projects/{project_id}/members`
-- `POST /projects/{project_id}/invite`
+- `POST /projects/{project_id}/invite` — returns `InviteMemberResponse` (pending invitation + `email_sent`)
+- `GET /projects/{project_id}/invitations` — owner: list pending invitations
+- `POST /projects/{project_id}/invitations/{invitation_id}/revoke` — owner: revoke pending invite
 - `POST /projects/{project_id}/members/access`
-- `POST /projects/{project_id}/revoke`
+- `POST /projects/{project_id}/revoke` — body includes optional `shared_token_action`: `keep_active` | `revoke_tokens`
+
+## Invitations (recipient)
+
+- `GET /me/invitations`
+- `GET /me/invitations/by-token/{token}`
+- `POST /me/invitations/{invitation_id}/accept`
+- `POST /me/invitations/{invitation_id}/reject`
 
 ## Runtime Tokens
 
@@ -55,4 +64,5 @@ This file captures the backend surface the CLI is designed against. It is a type
 - `403`: You do not have permission for this action.
 - `404`: Project/environment/token not found.
 - `409`: Show backend conflict text directly.
+- `429`: Invite email cooldown / rate limit (see `detail.message`).
 
