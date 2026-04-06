@@ -125,8 +125,26 @@ def test_invite_member_succeeds(monkeypatch, tmp_path) -> None:
                 "method": "POST",
                 "url": "https://api.example.com/api/v1/projects/proj_1/invite",
                 "json": {"email": "new@example.com"},
-                "status_code": 204,
-                "payload": None,
+                "status_code": 201,
+                "payload": {
+                    "invitation": {
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "project_id": "00000000-0000-4000-8000-000000000002",
+                        "project_name": "my-ai-app",
+                        "email": "new@example.com",
+                        "role": "member",
+                        "can_push_pull_secrets": True,
+                        "invited_by_email": "owner@example.com",
+                        "status": "pending",
+                        "expires_at": "2026-12-31T00:00:00Z",
+                        "last_sent_at": "2026-04-01T00:00:00Z",
+                        "send_count": 1,
+                        "cooldown_until": None,
+                        "created_at": "2026-04-01T00:00:00Z",
+                    },
+                    "email_sent": True,
+                    "message": None,
+                },
                 "auth": "member-auth-token",
             },
         ],
@@ -136,7 +154,7 @@ def test_invite_member_succeeds(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["invite", "new@example.com"])
 
     assert result.exit_code == 0
-    assert "Invited new@example.com" in result.output
+    assert "Invitation sent to new@example.com" in result.output
 
 
 def test_member_access_allow_posts_correct_payload(monkeypatch, tmp_path) -> None:
@@ -212,13 +230,18 @@ def test_revoke_member_conflict_prompts_and_retries(monkeypatch, tmp_path) -> No
                 "url": "https://api.example.com/api/v1/projects/proj_1/revoke",
                 "json": {"email": "dev@example.com"},
                 "status_code": 409,
-                "payload": {"detail": "Member owns shared runtime tokens."},
+                "payload": {
+                    "detail": {
+                        "code": "shared_runtime_token_confirmation_required",
+                        "message": "Member owns shared runtime tokens.",
+                    }
+                },
                 "auth": "member-auth-token",
             },
             {
                 "method": "POST",
                 "url": "https://api.example.com/api/v1/projects/proj_1/revoke",
-                "json": {"email": "dev@example.com", "keep_shared_tokens": True},
+                "json": {"email": "dev@example.com", "shared_token_action": "keep_active"},
                 "status_code": 204,
                 "payload": None,
                 "auth": "member-auth-token",
@@ -259,7 +282,12 @@ def test_revoke_member_conflict_invalid_selection_aborts(monkeypatch, tmp_path) 
                 "url": "https://api.example.com/api/v1/projects/proj_1/revoke",
                 "json": {"email": "dev@example.com"},
                 "status_code": 409,
-                "payload": {"detail": "Member owns shared runtime tokens."},
+                "payload": {
+                    "detail": {
+                        "code": "shared_runtime_token_confirmation_required",
+                        "message": "Member owns shared runtime tokens.",
+                    }
+                },
                 "auth": "member-auth-token",
             },
         ],
@@ -293,7 +321,7 @@ def test_revoke_member_with_flag_emits_json(monkeypatch, tmp_path) -> None:
             {
                 "method": "POST",
                 "url": "https://api.example.com/api/v1/projects/proj_1/revoke",
-                "json": {"email": "dev@example.com", "keep_shared_tokens": True},
+                "json": {"email": "dev@example.com", "shared_token_action": "keep_active"},
                 "status_code": 204,
                 "payload": None,
                 "auth": "member-auth-token",
