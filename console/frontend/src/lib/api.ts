@@ -7,9 +7,14 @@ import type {
   PushSecretsResponse,
   PullSecretsResponse,
   Member,
+  InvitationSummary,
+  InvitationDetail,
+  InviteMemberResponse,
+  ProjectInvitation,
   RuntimeToken,
   RuntimeTokenShare,
   AuditLog,
+  UnifiedAuditLogListResponse,
   SecretStats,
   CliAuthRequest,
   RequestOptions,
@@ -351,13 +356,91 @@ export function inviteMember(
   accessToken: string,
   body: { email: string; role?: string; can_push_pull_secrets?: boolean },
   options: RequestOptions = {}
-): Promise<Member> {
-  return apiRequest<Member>(`/projects/${encodePathSegment(projectId)}/invite`, {
+): Promise<InviteMemberResponse> {
+  return apiRequest<InviteMemberResponse>(`/projects/${encodePathSegment(projectId)}/invite`, {
     ...options,
     method: 'POST',
     accessToken,
     body,
   });
+}
+
+export function listMyInvitations(
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<InvitationSummary[]> {
+  return apiRequest<InvitationSummary[]>('/me/invitations', {
+    ...options,
+    accessToken,
+  });
+}
+
+export function getInvitationByToken(
+  token: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<InvitationDetail> {
+  return apiRequest<InvitationDetail>(
+    `/me/invitations/by-token/${encodePathSegment(token)}`,
+    {
+      ...options,
+      accessToken,
+    }
+  );
+}
+
+export function acceptInvitation(
+  invitationId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<Member> {
+  return apiRequest<Member>(`/me/invitations/${encodePathSegment(invitationId)}/accept`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export function rejectInvitation(
+  invitationId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(`/me/invitations/${encodePathSegment(invitationId)}/reject`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export function listProjectInvitations(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<ProjectInvitation[]> {
+  return apiRequest<ProjectInvitation[]>(
+    `/projects/${encodePathSegment(projectId)}/invitations`,
+    {
+      ...options,
+      accessToken,
+    }
+  );
+}
+
+export function revokeProjectInvitation(
+  projectId: string,
+  invitationId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(
+    `/projects/${encodePathSegment(projectId)}/invitations/${encodePathSegment(invitationId)}/revoke`,
+    {
+      ...options,
+      method: 'POST',
+      accessToken,
+    }
+  );
 }
 
 export function updateMemberSecretAccess(
@@ -492,9 +575,9 @@ export function listAuditLogs(
 export function listUnifiedAuditLogs(
   accessToken: string,
   { limit = 100, ...options }: AuditLogsOptions = {}
-): Promise<AuditLog[]> {
+): Promise<UnifiedAuditLogListResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
-  return apiRequest<AuditLog[]>(`/audit-logs/unified?${params.toString()}`, {
+  return apiRequest<UnifiedAuditLogListResponse>(`/audit-logs/unified?${params.toString()}`, {
     ...options,
     accessToken,
   });
