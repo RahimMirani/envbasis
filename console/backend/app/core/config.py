@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     cli_auth_jwt_algorithm: str = "HS256"
     cli_auth_jwt_issuer: str = "envbasis-cli"
     cli_auth_jwt_audience: str = "envbasis-cli"
+    invite_app_base_url: str = "http://localhost:5173"
+    invite_from_email: str | None = None
+    invite_smtp_host: str | None = None
+    invite_smtp_port: int = 587
+    invite_smtp_user: str | None = None
+    invite_smtp_password: str | None = None
+    invite_smtp_use_tls: bool = True
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
