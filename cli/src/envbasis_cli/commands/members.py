@@ -42,7 +42,7 @@ def register(root_app: typer.Typer) -> None:
             app_context.output.emit_json(payload or {"invited": True, "email": email})
             return
 
-        app_context.output.success(f"Invited {email}")
+        app_context.output.success(f"Invitation sent to {email}")
 
     @root_app.command("revoke")
     def revoke_member(
@@ -66,11 +66,13 @@ def register(root_app: typer.Typer) -> None:
             )
             raise typer.Exit(code=1)
 
-        request = RevokeMemberRequest(
-            email=email,
-            keep_shared_tokens=keep_shared_tokens or None,
-            revoke_shared_tokens=revoke_shared_tokens or None,
-        )
+        shared_action: str | None = None
+        if keep_shared_tokens:
+            shared_action = "keep_active"
+        elif revoke_shared_tokens:
+            shared_action = "revoke_tokens"
+
+        request = RevokeMemberRequest(email=email, shared_token_action=shared_action)
 
         try:
             project = resolve_project(app_context, client)
@@ -84,9 +86,9 @@ def register(root_app: typer.Typer) -> None:
                 selection = typer.prompt("Selection").strip()
 
                 if selection == "1":
-                    request = RevokeMemberRequest(email=email, keep_shared_tokens=True)
+                    request = RevokeMemberRequest(email=email, shared_token_action="keep_active")
                 elif selection == "2":
-                    request = RevokeMemberRequest(email=email, revoke_shared_tokens=True)
+                    request = RevokeMemberRequest(email=email, shared_token_action="revoke_tokens")
                 else:
                     app_context.output.info("Aborted.")
                     raise typer.Exit(code=1) from exc
