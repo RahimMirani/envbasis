@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, aliased
 
@@ -15,7 +16,7 @@ from app.models.environment import Environment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
-from app.schemas.audit_log import AuditLogRead, UnifiedAuditLogRead
+from app.schemas.audit_log import AuditLogRead, UnifiedAuditLogListResponse, UnifiedAuditLogRead
 from app.services.audit import maybe_cleanup_old_audit_logs
 
 router = APIRouter(prefix="/projects")
@@ -38,6 +39,24 @@ def _sanitize_cli_auth_metadata(metadata: dict | None) -> dict | None:
         key: value for key, value in metadata.items() if key not in CLI_AUTH_SENSITIVE_METADATA_KEYS
     }
     return sanitized_metadata or None
+
+
+def _parse_cursor(cursor: str | None) -> datetime | None:
+    if cursor is None:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid audit cursor.",
+        ) from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
 
 
 @router.get("/{project_id}/audit-logs", response_model=list[AuditLogRead])
@@ -76,13 +95,17 @@ def list_audit_logs(
     ]
 
 
-@unified_router.get("/unified", response_model=list[UnifiedAuditLogRead])
+@unified_router.get("/unified", response_model=UnifiedAuditLogListResponse)
 def list_unified_audit_logs(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+    project_id: uuid.UUID | None = Query(default=None),
+    source: str = Query(default="all", pattern="^(all|project|cli_auth)$"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[UnifiedAuditLogRead]:
+) -> UnifiedAuditLogListResponse:
     maybe_cleanup_old_audit_logs(db)
+    cursor_dt = _parse_cursor(cursor)
 
     accessible_project_ids = db.scalars(
         select(Project.id)
@@ -94,33 +117,52 @@ def list_unified_audit_logs(
     ).all()
     project_ids = list(accessible_project_ids)
 
+    if project_id is not None:
+        if project_id not in project_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this project.",
+            )
+        project_ids = [project_id]
+
     actor = aliased(User)
     environment = aliased(Environment)
     cli_actor = aliased(User)
+    fetch_limit = limit + 1
     project_rows = []
-    if project_ids:
-        project_rows = db.execute(
+    if project_ids and source in {"all", "project"}:
+        project_stmt = (
             select(AuditLog, actor.email, environment.name)
             .outerjoin(actor, actor.id == AuditLog.user_id)
             .outerjoin(environment, environment.id == AuditLog.environment_id)
             .where(AuditLog.project_id.in_(project_ids))
             .order_by(AuditLog.created_at.desc())
-            .limit(limit)
-        ).all()
-
-    cli_rows = db.execute(
-        select(CliAuthAuditLog, cli_actor.email)
-        .outerjoin(cli_actor, cli_actor.id == CliAuthAuditLog.user_id)
-        .outerjoin(CliAuthSession, CliAuthSession.id == CliAuthAuditLog.cli_auth_session_id)
-        .where(
-            or_(
-                CliAuthAuditLog.user_id == current_user.id,
-                CliAuthSession.approved_by_user_id == current_user.id,
-            )
+            .limit(fetch_limit)
         )
-        .order_by(CliAuthAuditLog.created_at.desc())
-        .limit(limit)
-    ).all()
+        if cursor_dt is not None:
+            project_stmt = project_stmt.where(AuditLog.created_at < cursor_dt)
+
+        project_rows = db.execute(project_stmt).all()
+
+    cli_rows = []
+    if source in {"all", "cli_auth"}:
+        cli_stmt = (
+            select(CliAuthAuditLog, cli_actor.email)
+            .outerjoin(cli_actor, cli_actor.id == CliAuthAuditLog.user_id)
+            .outerjoin(CliAuthSession, CliAuthSession.id == CliAuthAuditLog.cli_auth_session_id)
+            .where(
+                or_(
+                    CliAuthAuditLog.user_id == current_user.id,
+                    CliAuthSession.approved_by_user_id == current_user.id,
+                )
+            )
+            .order_by(CliAuthAuditLog.created_at.desc())
+            .limit(fetch_limit)
+        )
+        if cursor_dt is not None:
+            cli_stmt = cli_stmt.where(CliAuthAuditLog.created_at < cursor_dt)
+
+        cli_rows = db.execute(cli_stmt).all()
 
     merged_entries: list[UnifiedAuditLogRead] = [
         UnifiedAuditLogRead(
@@ -157,4 +199,7 @@ def list_unified_audit_logs(
         ]
     )
     merged_entries.sort(key=lambda item: item.created_at, reverse=True)
-    return merged_entries[:limit]
+    has_more = len(merged_entries) > limit
+    visible_entries = merged_entries[:limit]
+    next_cursor = visible_entries[-1].created_at.astimezone(timezone.utc).isoformat() if has_more and visible_entries else None
+    return UnifiedAuditLogListResponse(logs=visible_entries, next_cursor=next_cursor)
