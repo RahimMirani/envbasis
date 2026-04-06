@@ -219,8 +219,7 @@ class MemberAccessRequest(BaseModel):
 
 class RevokeMemberRequest(BaseModel):
     email: str
-    keep_shared_tokens: bool | None = None
-    revoke_shared_tokens: bool | None = None
+    shared_token_action: str | None = None
 
 
 class RuntimeTokenSummary(BaseModel):
