@@ -83,7 +83,7 @@ export default function AuditLogsPage() {
           return;
         }
 
-        const scopedLogs = response.filter(
+        const scopedLogs = response.logs.filter(
           (log) => log.source === 'cli_auth' || log.project_id === currentProject.id
         );
 
