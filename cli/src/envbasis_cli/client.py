@@ -123,6 +123,13 @@ class EnvBasisClient:
     def _stringify(value: Any) -> str:
         if isinstance(value, str):
             return value
+        if isinstance(value, dict):
+            message = value.get("message")
+            if isinstance(message, str) and message.strip():
+                return message
+            code = value.get("code")
+            if isinstance(code, str) and code.strip():
+                return f"{code}: {value}"
         return str(value)
 
     @staticmethod
