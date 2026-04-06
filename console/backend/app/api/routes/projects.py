@@ -25,6 +25,7 @@ from app.models.runtime_token_share import RuntimeTokenShare
 from app.models.user import User
 from app.schemas.common import MessageResponse
 from app.schemas.environment import EnvironmentCreate, EnvironmentRead
+from app.schemas.invitation import InviteMemberResponse, ProjectInvitationRead
 from app.schemas.member import (
     MemberAccessUpdateRequest,
     MemberInviteRequest,
@@ -33,6 +34,11 @@ from app.schemas.member import (
 )
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from app.services.audit import write_audit_log
+from app.services.invitation_service import (
+    create_or_resend_invitation,
+    list_project_invitations,
+    revoke_project_invitation,
+)
 
 router = APIRouter(prefix="/projects")
 
@@ -429,9 +435,39 @@ def list_members(
     return list(members.values())
 
 
+@router.get(
+    "/{project_id}/invitations",
+    response_model=list[ProjectInvitationRead],
+)
+def list_pending_invitations(
+    project_access: ProjectAccess = Depends(require_project_owner),
+    db: Session = Depends(get_db),
+) -> list[ProjectInvitationRead]:
+    return list_project_invitations(db, project=project_access.project)
+
+
+@router.post(
+    "/{project_id}/invitations/{invitation_id}/revoke",
+    response_model=MessageResponse,
+)
+def revoke_invitation(
+    invitation_id: uuid.UUID,
+    project_access: ProjectAccess = Depends(require_project_owner),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    revoke_project_invitation(
+        db,
+        project=project_access.project,
+        invitation_id=invitation_id,
+        revoked_by=current_user,
+    )
+    return MessageResponse(detail="Invitation revoked.")
+
+
 @router.post(
     "/{project_id}/invite",
-    response_model=ProjectMemberRead,
+    response_model=InviteMemberResponse,
     status_code=status.HTTP_201_CREATED,
 )
 def invite_member(
@@ -439,56 +475,15 @@ def invite_member(
     project_access: ProjectAccess = Depends(require_project_owner),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> ProjectMemberRead:
-    invited_email = payload.email.strip().lower()
-    invited_user = db.scalar(select(User).where(User.email == invited_email))
-    if invited_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User must authenticate once before they can be added to a project.",
-        )
-
-    if invited_user.id == project_access.project.owner_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Project owner is already part of this project.",
-        )
-
-    membership = db.scalar(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_access.project.id,
-            ProjectMember.user_id == invited_user.id,
-        )
-    )
-    if membership is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already a project member.",
-        )
-
-    membership = ProjectMember(
-        project_id=project_access.project.id,
-        user_id=invited_user.id,
+) -> InviteMemberResponse:
+    return create_or_resend_invitation(
+        db,
+        project=project_access.project,
+        invited_email=str(payload.email),
         role=payload.role,
         can_push_pull_secrets=payload.can_push_pull_secrets,
-        invited_by=current_user.id,
+        invited_by=current_user,
     )
-    db.add(membership)
-    db.flush()
-    write_audit_log(
-        db,
-        project_id=project_access.project.id,
-        user_id=current_user.id,
-        action="member.invited",
-        metadata={
-            "email": invited_user.email,
-            "role": payload.role,
-            "can_push_pull_secrets": payload.can_push_pull_secrets,
-        },
-    )
-    db.commit()
-    db.refresh(membership)
-    return _serialize_member(membership, invited_user)
 
 
 @router.post("/{project_id}/members/access", response_model=ProjectMemberRead)
