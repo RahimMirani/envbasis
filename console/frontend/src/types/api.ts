@@ -187,6 +187,17 @@ export interface ApiErrorDetails {
   };
 }
 
+export interface Webhook {
+  id: string;
+  project_id: string;
+  url: string;
+  events: string[];
+  signing_secret: string;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+}
+
 // Request options
 
 export interface RequestOptions {
