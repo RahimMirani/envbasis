@@ -18,6 +18,11 @@ class MemberRevokeRequest(BaseModel):
     shared_token_action: Literal["keep_active", "revoke_tokens"] | None = None
 
 
+class MemberBulkRevokeRequest(BaseModel):
+    emails: list[EmailStr] = Field(min_length=1)
+    shared_token_action: Literal["keep_active", "revoke_tokens"] | None = None
+
+
 class MemberAccessUpdateRequest(BaseModel):
     email: EmailStr
     can_push_pull_secrets: bool
