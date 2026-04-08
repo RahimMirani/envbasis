@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Shield, UserPlus, UserX } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
@@ -83,6 +84,9 @@ export default function TeamPage() {
   const [keepActiveConfirm, setKeepActiveConfirm] = useState(false);
   const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>([]);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
+  const [selectedInviteIds, setSelectedInviteIds] = useState<string[]>([]);
+  const [isBulkRevokingInvites, setIsBulkRevokingInvites] = useState(false);
+  const [showBulkRevokeInvitesConfirm, setShowBulkRevokeInvitesConfirm] = useState(false);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [bulkMembersPendingRevoke, setBulkMembersPendingRevoke] = useState<Member[]>([]);
   const [isBulkRevoking, setIsBulkRevoking] = useState(false);
@@ -152,11 +156,22 @@ export default function TeamPage() {
     );
   }, [members]);
 
+  useEffect(() => {
+    setSelectedInviteIds((current) =>
+      current.filter((id) => pendingInvites.some((inv) => inv.id === id))
+    );
+  }, [pendingInvites]);
+
   const selectedMembers = members.filter((member) => selectedMemberIds.includes(member.user_id));
   const revocableMembers = members.filter((member) => member.role !== 'owner');
   const allRevocableSelected =
     revocableMembers.length > 0 &&
     revocableMembers.every((member) => selectedMemberIds.includes(member.user_id));
+
+  const selectedInvites = pendingInvites.filter((inv) => selectedInviteIds.includes(inv.id));
+  const allInvitesSelected =
+    pendingInvites.length > 0 &&
+    pendingInvites.every((inv) => selectedInviteIds.includes(inv.id));
 
   const closeInviteModal = () => {
     if (isInviting) {
@@ -239,6 +254,47 @@ export default function TeamPage() {
       setError((revErr as Error).message || 'Failed to revoke invitation.');
     } finally {
       setRevokingInviteId(null);
+    }
+  };
+
+  const toggleInviteSelection = (inviteId: string) => {
+    setSelectedInviteIds((current) =>
+      current.includes(inviteId)
+        ? current.filter((id) => id !== inviteId)
+        : [...current, inviteId]
+    );
+  };
+
+  const toggleSelectAllInvites = () => {
+    if (allInvitesSelected) {
+      setSelectedInviteIds([]);
+    } else {
+      setSelectedInviteIds(pendingInvites.map((inv) => inv.id));
+    }
+  };
+
+  const handleBulkRevokeInvites = async () => {
+    if (selectedInvites.length === 0) {
+      setShowBulkRevokeInvitesConfirm(false);
+      return;
+    }
+    setIsBulkRevokingInvites(true);
+    setError(null);
+    try {
+      await Promise.all(
+        selectedInvites.map((inv) =>
+          revokeProjectInvitation(currentProject.id, inv.id, accessToken!)
+        )
+      );
+      setPendingInvites((current) =>
+        current.filter((inv) => !selectedInvites.some((s) => s.id === inv.id))
+      );
+      setSelectedInviteIds([]);
+      setShowBulkRevokeInvitesConfirm(false);
+    } catch (err) {
+      setError((err as Error).message || 'Failed to revoke selected invitations.');
+    } finally {
+      setIsBulkRevokingInvites(false);
     }
   };
 
@@ -363,26 +419,59 @@ export default function TeamPage() {
       )}
 
       {canManageProject && pendingInvites.length > 0 && (
-        <div className="card" style={{ marginBottom: '1rem' }}>
-          <h3 className="page-subtitle" style={{ margin: '0 0 12px' }}>
-            Pending invitations
-          </h3>
+        <div className="card pending-invites-card">
+          <div className="pending-invites-header">
+            <span className="pending-invites-title">Pending Invitations</span>
+            <span className="badge badge-neutral">{pendingInvites.length}</span>
+            {selectedInvites.length > 0 && (
+              <button
+                className="btn btn-danger btn-sm"
+                style={{ marginLeft: 'auto' }}
+                onClick={() => setShowBulkRevokeInvitesConfirm(true)}
+                disabled={isBulkRevokingInvites}
+              >
+                <UserX size={13} />
+                Revoke {selectedInvites.length} selected
+              </button>
+            )}
+          </div>
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
-                  <th>Email</th>
+                  <th style={{ width: 40 }}>
+                    <Checkbox
+                      checked={allInvitesSelected}
+                      indeterminate={selectedInviteIds.length > 0 && !allInvitesSelected}
+                      onChange={toggleSelectAllInvites}
+                      aria-label="Select all invitations"
+                      disabled={isBulkRevokingInvites}
+                    />
+                  </th>
+                  <th>Recipient</th>
                   <th>Secrets access</th>
                   <th>Expires</th>
-                  <th>Sent</th>
-                  <th style={{ width: 100 }}>Actions</th>
+                  <th>Emails sent</th>
+                  <th style={{ width: 100 }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {pendingInvites.map((inv) => (
                   <tr key={inv.id}>
+                    <td className="table-checkbox-cell">
+                      <Checkbox
+                        checked={selectedInviteIds.includes(inv.id)}
+                        onChange={() => toggleInviteSelection(inv.id)}
+                        aria-label={`Select invitation for ${inv.email}`}
+                        disabled={isBulkRevokingInvites || revokingInviteId === inv.id}
+                      />
+                    </td>
                     <td className="mono">{inv.email}</td>
-                    <td>{inv.can_push_pull_secrets ? 'Yes' : 'No'}</td>
+                    <td>
+                      <span className={`badge ${inv.can_push_pull_secrets ? 'badge-success' : 'badge-neutral'}`}>
+                        {inv.can_push_pull_secrets ? 'Yes' : 'No'}
+                      </span>
+                    </td>
                     <td className="text-secondary">{formatDate(inv.expires_at)}</td>
                     <td className="text-secondary">{inv.send_count}</td>
                     <td>
@@ -390,7 +479,7 @@ export default function TeamPage() {
                         type="button"
                         className="btn btn-ghost btn-sm btn-danger-subtle"
                         onClick={() => handleRevokePendingInvite(inv)}
-                        disabled={revokingInviteId === inv.id}
+                        disabled={revokingInviteId === inv.id || isBulkRevokingInvites}
                       >
                         Revoke
                       </button>
@@ -401,9 +490,9 @@ export default function TeamPage() {
             </table>
           </div>
           {pendingInvites.some((p) => p.cooldown_until) && (
-            <p className="text-secondary" style={{ fontSize: 13, marginTop: 8 }}>
-              After two invite emails to the same address, this project must wait 5 days before sending
-              more.
+            <p className="pending-invites-note">
+              After two invite emails to the same address, this project must wait 5 days before
+              sending more.
             </p>
           )}
         </div>
@@ -429,9 +518,9 @@ export default function TeamPage() {
               <thead>
                 <tr>
                   <th style={{ width: 40 }}>
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={allRevocableSelected}
+                      indeterminate={selectedMemberIds.length > 0 && !allRevocableSelected}
                       onChange={toggleSelectAllMembers}
                       aria-label="Select all members"
                       disabled={!canManageProject || isBulkRevoking}
@@ -453,8 +542,7 @@ export default function TeamPage() {
                     <tr key={member.user_id}>
                       <td className="table-checkbox-cell">
                         {!isOwner && (
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={selectedMemberIds.includes(member.user_id)}
                             onChange={() => toggleMemberSelection(member.user_id)}
                             aria-label={`Select member ${member.email}`}
@@ -686,6 +774,19 @@ export default function TeamPage() {
           }
         }}
         isBusy={isBulkRevoking}
+      />
+      <ConfirmDialog
+        isOpen={showBulkRevokeInvitesConfirm}
+        title="Revoke Selected Invitations"
+        description={`Revoke ${selectedInvites.length} pending invitation${selectedInvites.length !== 1 ? 's' : ''}? The recipients will no longer be able to join.`}
+        confirmLabel="Revoke Invitations"
+        onConfirm={() => { void handleBulkRevokeInvites(); }}
+        onClose={() => {
+          if (!isBulkRevokingInvites) {
+            setShowBulkRevokeInvitesConfirm(false);
+          }
+        }}
+        isBusy={isBulkRevokingInvites}
       />
     </div>
   );
