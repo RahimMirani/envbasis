@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.api.deps import ProjectAccess
 from app.api.routes.secrets import (
+    bulk_delete_secrets,
     create_secret,
     delete_secret,
     list_secrets,
@@ -10,7 +11,15 @@ from app.api.routes.secrets import (
     reveal_secret,
     update_secret,
 )
-from app.schemas.secret import SecretCreateRequest, SecretPushRequest, SecretUpdateRequest
+from datetime import datetime, timedelta, timezone
+
+from app.schemas.secret import (
+    SecretBulkDeleteItem,
+    SecretBulkDeleteRequest,
+    SecretCreateRequest,
+    SecretPushRequest,
+    SecretUpdateRequest,
+)
 
 
 def test_secret_push_list_pull_and_reveal_round_trip(session_factory, seeder) -> None:
@@ -195,3 +204,131 @@ def test_secret_create_update_and_delete_increment_versions(session_factory, see
         ("DATABASE_URL", 2, False),
         ("DATABASE_URL", 3, True),
     ]
+
+
+def test_secret_expiration_can_be_set_updated_and_cleared(session_factory, seeder) -> None:
+    owner = seeder.user("owner-expiry@example.com")
+    project = seeder.project(owner, name="expiry-project")
+    environment = seeder.environment(project, name="prod")
+    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    initial_expiry = datetime.now(timezone.utc) + timedelta(days=7)
+    updated_expiry = datetime.now(timezone.utc) + timedelta(days=14)
+
+    with session_factory() as db:
+        create_response = create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(
+                key="API_TOKEN",
+                value="secret-value",
+                expires_at=initial_expiry,
+            ),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert create_response.changed is True
+    assert create_response.expires_at == initial_expiry
+
+    with session_factory() as db:
+        update_response = update_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="API_TOKEN",
+            payload=SecretUpdateRequest(value="secret-value", expires_at=updated_expiry),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert update_response.changed is True
+    assert update_response.version == 2
+    assert update_response.expires_at == updated_expiry
+
+    with session_factory() as db:
+        clear_response = update_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="API_TOKEN",
+            payload=SecretUpdateRequest(value="secret-value", expires_at=None),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert clear_response.changed is True
+    assert clear_response.version == 3
+    assert clear_response.expires_at is None
+
+    with session_factory() as db:
+        list_response = list_secrets(
+            project_id=project.id,
+            environment_id=environment.id,
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        reveal_response = reveal_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="API_TOKEN",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert list_response.secrets[0].expires_at is None
+    assert reveal_response.expires_at is None
+
+
+def test_bulk_delete_secrets_marks_each_secret_deleted(session_factory, seeder) -> None:
+    owner = seeder.user("owner-bulk-delete@example.com")
+    project = seeder.project(owner, name="bulk-delete-project")
+    environment = seeder.environment(project, name="prod")
+    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+
+    with session_factory() as db:
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="FIRST_KEY", value="one"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="SECOND_KEY", value="two"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    with session_factory() as db:
+        response = bulk_delete_secrets(
+            project_id=project.id,
+            payload=SecretBulkDeleteRequest(
+                items=[
+                    SecretBulkDeleteItem(environment_id=environment.id, key="FIRST_KEY"),
+                    SecretBulkDeleteItem(environment_id=environment.id, key="SECOND_KEY"),
+                ]
+            ),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert response.detail == "Deleted 2 secret(s)."
+
+    with session_factory() as db:
+        list_response = list_secrets(
+            project_id=project.id,
+            environment_id=environment.id,
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert list_response.secrets == []
