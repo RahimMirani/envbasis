@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Bell, Plus, GitBranch, Users, Clock, TerminalSquare } from 'lucide-react';
 import Modal from '../components/Modal';
 import DashboardLoader from '../components/DashboardLoader';
@@ -352,12 +352,10 @@ export default function ProjectsPage() {
       ) : (
         <div className="projects-grid stagger-in">
           {projects.map((project, i) => (
-            <div
+            <Link
               key={project.id}
+              to={`/projects/${project.id}/overview`}
               className="project-card glow-effect"
-              onClick={() => navigate(`/projects/${project.id}/overview`)}
-              role="button"
-              tabIndex={0}
               style={{ '--animation-order': i } as React.CSSProperties}
             >
               <div className="project-card-header">
@@ -391,13 +389,12 @@ export default function ProjectsPage() {
                   <span>{formatRelativeTime(project.last_activity_at || project.created_at)}</span>
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
 
-          <div
+          <button
+            type="button"
             className="project-card card-create glow-effect"
-            role="button"
-            tabIndex={0}
             style={{ '--animation-order': projects.length } as React.CSSProperties}
             onClick={openCreateModal}
           >
@@ -408,7 +405,7 @@ export default function ProjectsPage() {
               <h3>Create Project</h3>
               <p>Setup a new secure environment.</p>
             </div>
-          </div>
+          </button>
         </div>
       )}
 
