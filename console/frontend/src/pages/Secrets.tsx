@@ -13,6 +13,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import Checkbox from '../components/Checkbox';
 import CodeBlock from '../components/CodeBlock';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DashboardLoader from '../components/DashboardLoader';
@@ -918,9 +919,9 @@ export default function SecretsPage() {
               <thead>
                 <tr>
                   <th style={{ width: 40 }}>
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={allVisibleSelected}
+                      indeterminate={selectedSecretIds.length > 0 && !allVisibleSelected}
                       onChange={toggleSelectAllVisibleSecrets}
                       aria-label="Select all visible secrets"
                       disabled={!canUseSecrets || isBulkDeleting}
@@ -946,8 +947,7 @@ export default function SecretsPage() {
                   return (
                     <tr key={secretId}>
                       <td className="table-checkbox-cell">
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={selectedSecretIds.includes(secretId)}
                           onChange={() => toggleSecretSelection(secretId)}
                           aria-label={`Select secret ${secret.key}`}
