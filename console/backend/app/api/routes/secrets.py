@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import ProjectAccess, get_current_user, get_project_access, require_secret_access
@@ -28,6 +29,7 @@ from app.schemas.secret import (
 from app.services.audit import write_audit_log
 from app.services.crypto import decrypt_secret_value, encrypt_secret_value
 from app.services.environments import get_project_environment_or_404
+from app.services.webhooks import dispatch_webhooks, get_webhooks_for_event
 from app.services.secrets import (
     MAX_SECRET_KEY_LENGTH,
     build_secret_payload,
@@ -184,8 +186,9 @@ def push_secrets(
         action="secrets.pushed",
         metadata={"changed_keys": changed_keys, "changed_count": changed, "unchanged_count": unchanged},
     )
-
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secrets.pushed")
     db.commit()
+    dispatch_webhooks(webhook_targets, event="secrets.pushed", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"changed_keys": changed_keys, "changed_count": changed, "unchanged_count": unchanged})
     return SecretPushResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
@@ -223,6 +226,13 @@ def get_secret_stats(
 def list_secrets(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
+    key: Annotated[
+        str | None,
+        Query(
+            max_length=128,
+            description="Filter secrets by key (case-insensitive substring match)",
+        ),
+    ] = None,
     project_access: ProjectAccess = Depends(require_secret_access),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -236,7 +246,7 @@ def list_secrets(
         environment_id=environment_id,
     )
 
-    latest_rows = get_latest_secret_rows(db, environment_id=environment.id)
+    latest_rows = get_latest_secret_rows(db, environment_id=environment.id, key_filter=key)
     users_by_id = _get_users_by_id(db, latest_rows)
 
     write_audit_log(
@@ -413,8 +423,10 @@ def create_secret(
         action="secret.created",
         metadata={"key": key, "version": secret.version},
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secret.created")
     db.commit()
     db.refresh(secret)
+    dispatch_webhooks(webhook_targets, event="secret.created", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version})
     return SecretMutationResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
@@ -482,8 +494,10 @@ def update_secret(
         action="secret.updated",
         metadata={"key": key, "version": secret.version},
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secret.updated")
     db.commit()
     db.refresh(secret)
+    dispatch_webhooks(webhook_targets, event="secret.updated", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version})
     return SecretMutationResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
@@ -540,8 +554,10 @@ def delete_secret(
         action="secret.deleted",
         metadata={"key": key, "version": secret.version},
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secret.deleted")
     db.commit()
     db.refresh(secret)
+    dispatch_webhooks(webhook_targets, event="secret.deleted", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version})
     return SecretDeleteResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
