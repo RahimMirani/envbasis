@@ -46,10 +46,12 @@ export default function AuditLogsPage() {
   const { accessToken, apiConfigError } = useAuth();
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterAction, setFilterAction] = useState('all');
   const [filterEnv, setFilterEnv] = useState(currentEnv === 'all' ? 'all' : currentEnv);
-  const [filterSource, setFilterSource] = useState('all');
+  const [filterSource, setFilterSource] = useState<'all' | 'project' | 'cli_auth'>('all');
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   useEffect(() => {
     setFilterEnv(currentEnv === 'all' ? 'all' : currentEnv);
@@ -75,7 +77,9 @@ export default function AuditLogsPage() {
 
       try {
         const response = await listUnifiedAuditLogs(accessToken!, {
-          limit: 100,
+          limit: 50,
+          projectId: currentProject.id,
+          source: filterSource,
           signal: controller.signal,
         });
 
@@ -83,11 +87,8 @@ export default function AuditLogsPage() {
           return;
         }
 
-        const scopedLogs = response.filter(
-          (log) => log.source === 'cli_auth' || log.project_id === currentProject.id
-        );
-
-        setLogs(scopedLogs);
+        setLogs(response.logs);
+        setNextCursor(response.next_cursor);
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -95,6 +96,7 @@ export default function AuditLogsPage() {
 
         setError((loadError as Error).message || 'Failed to load audit logs.');
         setLogs([]);
+        setNextCursor(null);
       } finally {
         if (isActive) {
           setIsLoading(false);
@@ -108,39 +110,53 @@ export default function AuditLogsPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id]);
+  }, [accessToken, apiConfigError, currentProject.id, filterSource]);
 
   const filteredLogs = useMemo(
     () =>
       logs.filter((log) => {
-        const matchSource = filterSource === 'all' || log.source === filterSource;
         const matchAction = filterAction === 'all' || log.action === filterAction;
         const environmentName = log.environment_name || '—';
         const matchEnv =
           filterEnv === 'all' ||
           (filterSource === 'cli_auth' ? true : environmentName === filterEnv) ||
           (log.source === 'cli_auth' && filterEnv === 'all');
-        return matchSource && matchAction && matchEnv;
+        return matchAction && matchEnv;
       }),
     [filterAction, filterEnv, filterSource, logs]
   );
 
   const uniqueActions = useMemo(() => [...new Set(logs.map((log) => log.action))], [logs]);
 
-  const sourceOptions = useMemo(
-    () =>
-      logs.some((log) => log.source === 'cli_auth')
-        ? [
-            { value: 'all', label: 'All sources' },
-            { value: 'project', label: 'Project' },
-            { value: 'cli_auth', label: 'CLI auth' },
-          ]
-        : [
-            { value: 'all', label: 'All sources' },
-            { value: 'project', label: 'Project' },
-          ],
-    [logs]
-  );
+  const sourceOptions = [
+    { value: 'all', label: 'All sources' },
+    { value: 'project', label: 'Project' },
+    { value: 'cli_auth', label: 'CLI auth' },
+  ] as const;
+
+  const handleLoadMore = async () => {
+    if (!accessToken || !nextCursor || isLoadingMore) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    setError(null);
+
+    try {
+      const response = await listUnifiedAuditLogs(accessToken, {
+        limit: 50,
+        cursor: nextCursor,
+        projectId: currentProject.id,
+        source: filterSource,
+      });
+      setLogs((currentLogs) => [...currentLogs, ...response.logs]);
+      setNextCursor(response.next_cursor);
+    } catch (loadError) {
+      setError((loadError as Error).message || 'Failed to load more audit logs.');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   return (
     <div className="audit-page animate-in">
@@ -179,7 +195,9 @@ export default function AuditLogsPage() {
             <select
               className="input select audit-filter-select"
               value={filterSource}
-              onChange={(event) => setFilterSource(event.target.value)}
+              onChange={(event) =>
+                setFilterSource(event.target.value as 'all' | 'project' | 'cli_auth')
+              }
               id="audit-filter-source"
             >
               {sourceOptions.map((option) => (
@@ -268,6 +286,13 @@ export default function AuditLogsPage() {
                 );
               })}
             </div>
+            {nextCursor && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem 1.25rem 1.25rem' }}>
+                <button className="btn btn-secondary btn-sm" onClick={handleLoadMore} disabled={isLoadingMore}>
+                  {isLoadingMore ? 'Loading...' : 'Load More'}
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}

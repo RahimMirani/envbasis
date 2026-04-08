@@ -17,6 +17,7 @@ from app.schemas.secret import (
     SecretItemRead,
     SecretListResponse,
     SecretMutationResponse,
+    SecretRevealResponse,
     SecretPullResponse,
     ProjectSecretStatsResponse,
     SecretPushRequest,
@@ -98,6 +99,17 @@ def _get_latest_secret_map(
             environment_id=environment_id,
             include_deleted=True,
         )
+    }
+
+
+def _get_users_by_id(db: Session, rows: list[Secret]) -> dict[uuid.UUID, User]:
+    updated_by_ids = {row.updated_by for row in rows if row.updated_by is not None}
+    if not updated_by_ids:
+        return {}
+
+    return {
+        user.id: user
+        for user in db.query(User).filter(User.id.in_(updated_by_ids)).all()
     }
 
 
@@ -225,21 +237,7 @@ def list_secrets(
     )
 
     latest_rows = get_latest_secret_rows(db, environment_id=environment.id)
-    try:
-        payload, _ = build_secret_payload(latest_rows)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=str(exc),
-        ) from exc
-
-    updated_by_ids = {row.updated_by for row in latest_rows if row.updated_by is not None}
-    users_by_id = {}
-    if updated_by_ids:
-        users_by_id = {
-            user.id: user
-            for user in db.query(User).filter(User.id.in_(updated_by_ids)).all()
-        }
+    users_by_id = _get_users_by_id(db, latest_rows)
 
     write_audit_log(
         db,
@@ -247,7 +245,7 @@ def list_secrets(
         environment_id=environment.id,
         user_id=current_user.id,
         action="secrets.listed",
-        metadata={"secret_count": len(payload)},
+        metadata={"secret_count": len(latest_rows)},
     )
     db.commit()
 
@@ -257,7 +255,6 @@ def list_secrets(
         secrets=[
             SecretItemRead(
                 key=row.key,
-                value=payload[row.key],
                 version=row.version,
                 updated_at=row.updated_at,
                 updated_by_user_id=row.updated_by,
@@ -266,6 +263,56 @@ def list_secrets(
             for row in latest_rows
         ],
         generated_at=datetime.now(timezone.utc),
+    )
+
+
+@router.get(
+    "/{project_id}/environments/{environment_id}/secrets/{secret_key}/reveal",
+    response_model=SecretRevealResponse,
+)
+def reveal_secret(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    secret_key: str,
+    project_access: ProjectAccess = Depends(require_secret_access),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SecretRevealResponse:
+    if project_id != project_access.project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    environment = get_project_environment_or_404(
+        db,
+        project=project_access.project,
+        environment_id=environment_id,
+    )
+    key = _validate_secret_key(secret_key)
+    latest = _get_latest_secret_map(db, environment_id=environment.id).get(key)
+    if latest is None or latest.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found.")
+
+    users_by_id = _get_users_by_id(db, [latest])
+    value = decrypt_secret_value(latest.encrypted_value)
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        environment_id=environment.id,
+        user_id=current_user.id,
+        action="secret.revealed",
+        metadata={"secret_key": key, "version": latest.version},
+    )
+    db.commit()
+
+    return SecretRevealResponse(
+        project_id=project_access.project.id,
+        environment_id=environment.id,
+        key=key,
+        value=value,
+        version=latest.version,
+        updated_at=latest.updated_at,
+        updated_by_user_id=latest.updated_by,
+        updated_by_email=users_by_id.get(latest.updated_by).email if latest.updated_by in users_by_id else None,
+        revealed_at=datetime.now(timezone.utc),
     )
 
 

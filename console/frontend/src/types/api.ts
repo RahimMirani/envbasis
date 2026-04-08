@@ -27,12 +27,21 @@ export interface Environment {
 
 export interface Secret {
   key: string;
-  value: string;
   version: number;
   environment_id: string;
   environment?: string;
   updated_at: string;
   updated_by_email: string | null;
+}
+
+export interface RevealedSecret {
+  key: string;
+  value: string;
+  version: number;
+  environment_id: string;
+  updated_at: string;
+  updated_by_email: string | null;
+  revealed_at: string;
 }
 
 export interface SecretListResponse {
@@ -54,6 +63,54 @@ export interface Member {
   role: 'owner' | 'member';
   can_push_pull_secrets: boolean;
   joined_at: string;
+}
+
+export interface ProjectInvitation {
+  id: string;
+  project_id: string;
+  project_name: string;
+  email: string;
+  role: string;
+  can_push_pull_secrets: boolean;
+  invited_by_email: string | null;
+  status: string;
+  expires_at: string;
+  last_sent_at: string | null;
+  send_count: number;
+  cooldown_until: string | null;
+  created_at: string;
+}
+
+export interface InvitationSummary {
+  id: string;
+  project_id: string;
+  project_name: string;
+  inviter_email: string | null;
+  email: string;
+  role: string;
+  can_push_pull_secrets: boolean;
+  status: 'pending';
+  expires_at: string;
+  created_at: string;
+}
+
+export interface InvitationDetail {
+  id: string;
+  project_id: string;
+  project_name: string | null;
+  inviter_email: string | null;
+  email: string;
+  role: string;
+  can_push_pull_secrets: boolean;
+  status: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface InviteMemberResponse {
+  invitation: ProjectInvitation;
+  email_sent: boolean;
+  message: string | null;
 }
 
 export interface RuntimeToken {
@@ -83,6 +140,11 @@ export interface AuditLog {
   source: 'project' | 'cli_auth';
   metadata_json: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface UnifiedAuditLogListResponse {
+  logs: AuditLog[];
+  next_cursor: string | null;
 }
 
 export interface SecretStats {

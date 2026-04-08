@@ -32,3 +32,8 @@ class UnifiedAuditLogRead(BaseModel):
     action: str
     metadata_json: dict[str, Any] | None
     created_at: datetime
+
+
+class UnifiedAuditLogListResponse(BaseModel):
+    logs: list[UnifiedAuditLogRead]
+    next_cursor: str | None

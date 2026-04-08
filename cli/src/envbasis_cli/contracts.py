@@ -18,6 +18,7 @@ class Endpoint(StrEnum):
     SECRETS_PUSH = "/projects/{project_id}/environments/{environment_id}/secrets/push"
     SECRETS_PULL = "/projects/{project_id}/environments/{environment_id}/secrets/pull"
     SECRETS_LIST = "/projects/{project_id}/environments/{environment_id}/secrets"
+    SECRET_REVEAL = "/projects/{project_id}/environments/{environment_id}/secrets/{key}/reveal"
     SECRETS_STATS = "/projects/{project_id}/secrets/stats"
     SECRET_DETAIL = "/projects/{project_id}/environments/{environment_id}/secrets/{key}"
     MEMBERS = "/projects/{project_id}/members"
@@ -90,6 +91,26 @@ class SecretMetadata(BaseModel):
     updated_at: str | None = None
     updated_by: str | None = None
     value: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        normalized = dict(value)
+        if "updated_by" not in normalized and "updated_by_email" in normalized:
+            normalized["updated_by"] = normalized["updated_by_email"]
+        return normalized
+
+
+class RevealedSecret(BaseModel):
+    key: str
+    value: str
+    version: int | None = None
+    updated_at: str | None = None
+    updated_by_email: str | None = None
+    revealed_at: str | None = None
 
 
 class SecretsListResponse(BaseModel):
@@ -219,8 +240,7 @@ class MemberAccessRequest(BaseModel):
 
 class RevokeMemberRequest(BaseModel):
     email: str
-    keep_shared_tokens: bool | None = None
-    revoke_shared_tokens: bool | None = None
+    shared_token_action: str | None = None
 
 
 class RuntimeTokenSummary(BaseModel):

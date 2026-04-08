@@ -21,7 +21,7 @@ import {
 import CodeBlock from '../components/CodeBlock';
 import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
-import { listAuditLogs } from '../lib/api';
+import { listAuditLogs, listProjectInvitations } from '../lib/api';
 import {
   getAuditActionLabel,
   getAuditColor,
@@ -66,6 +66,7 @@ export default function OverviewPage() {
   const { accessToken, apiConfigError } = useAuth();
   const navigate = useNavigate();
   const [activityLogs, setActivityLogs] = useState<AuditLog[]>([]);
+  const [pendingInviteCount, setPendingInviteCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
   const totalSecretCount = secretStats?.total_secret_count;
@@ -84,20 +85,28 @@ export default function OverviewPage() {
 
       try {
         if (currentProject.role === 'owner') {
-          const logs = await listAuditLogs(currentProject.id, accessToken!, {
-            limit: 6,
-            signal: controller.signal,
-          });
+          const [logs, invites] = await Promise.all([
+            listAuditLogs(currentProject.id, accessToken!, {
+              limit: 6,
+              signal: controller.signal,
+            }),
+            listProjectInvitations(currentProject.id, accessToken!, {
+              signal: controller.signal,
+            }),
+          ]);
 
           if (isActive) {
             setActivityLogs(logs);
+            setPendingInviteCount(invites.length);
           }
         } else if (isActive) {
           setActivityLogs([]);
+          setPendingInviteCount(0);
         }
       } catch {
         if (isActive) {
           setActivityLogs([]);
+          setPendingInviteCount(0);
         }
       } finally {
         if (isActive) {
@@ -142,22 +151,27 @@ export default function OverviewPage() {
         id: 'ob1',
         label: 'Create first environment',
         done: (currentProject.environment_count || 0) > 0,
+        path: `${projectBasePath}/environments`,
       },
       {
         id: 'ob2',
         label: 'Create runtime token',
         done: (currentProject.runtime_token_count || 0) > 0,
+        path: `${projectBasePath}/tokens`,
       },
       {
         id: 'ob3',
         label: 'Invite your first teammate',
-        done: (currentProject.member_count || 0) > 1,
+        done: (currentProject.member_count || 0) > 1 || pendingInviteCount > 0,
+        path: `${projectBasePath}/team`,
       },
     ],
     [
       currentProject.environment_count,
       currentProject.member_count,
       currentProject.runtime_token_count,
+      pendingInviteCount,
+      projectBasePath,
     ]
   );
 
@@ -295,13 +309,15 @@ export default function OverviewPage() {
                 </div>
                 <div className="onboarding-list">
                   {onboardingChecklist.map((item) => (
-                    <div
+                    <button
+                      type="button"
                       className={`onboarding-item ${item.done ? 'onboarding-item-done' : ''}`}
                       key={item.id}
+                      onClick={() => navigate(item.path)}
                     >
                       <CheckCircle2 size={16} />
                       <span>{item.label}</span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>

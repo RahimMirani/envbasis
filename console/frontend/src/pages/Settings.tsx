@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { deleteProject, updateProject } from '../lib/api';
 import type { Project } from '../types/api';
 
@@ -23,6 +24,7 @@ export default function SettingsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     setName(project.name);
@@ -71,10 +73,6 @@ export default function SettingsPage() {
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`Delete project "${project.name}"? This cannot be undone.`)) {
-      return;
-    }
-
     setIsDeleting(true);
     setError(null);
     setSuccessMessage(null);
@@ -159,7 +157,7 @@ export default function SettingsPage() {
             <button
               className="btn btn-danger btn-sm"
               id="delete-project-btn"
-              onClick={handleDelete}
+              onClick={() => setShowDeleteConfirm(true)}
               disabled={!canManageProject || isSaving || isDeleting}
             >
               {isDeleting ? 'Deleting...' : 'Delete Project'}
@@ -167,6 +165,19 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        title="Delete Project"
+        description={`Delete project "${project.name}"? This cannot be undone.`}
+        confirmLabel="Delete Project"
+        onConfirm={handleDelete}
+        onClose={() => {
+          if (!isDeleting) {
+            setShowDeleteConfirm(false);
+          }
+        }}
+        isBusy={isDeleting}
+      />
     </div>
   );
 }

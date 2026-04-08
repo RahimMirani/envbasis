@@ -14,6 +14,7 @@ from envbasis_cli.contracts import (
     PullSecretsResponse,
     PushSecretsRequest,
     PushSecretsResponse,
+    RevealedSecret,
     SecretMetadata,
     SecretsListResponse,
     SecretsStats,
@@ -230,12 +231,35 @@ def list_secrets(
     except APIError as exc:
         raise exit_for_api_error(app_context, exc) from exc
 
-    if app_context.options.output_json:
-        app_context.output.emit_json([secret.model_dump() for secret in secrets.secrets])
-        return
-
     if not secrets.secrets:
         app_context.output.info(f"No secrets found for environment {environment.name}.")
+        return
+
+    rendered_secrets = secrets.secrets
+    if reveal:
+        revealed_by_key: dict[str, RevealedSecret] = {}
+        for secret in secrets.secrets:
+            try:
+                revealed_by_key[secret.key] = client.request_model(
+                    "GET",
+                    build_path(
+                        Endpoint.SECRET_REVEAL,
+                        project_id=project.id,
+                        environment_id=environment.id,
+                        key=secret.key,
+                    ),
+                    RevealedSecret,
+                )
+            except APIError as exc:
+                raise exit_for_api_error(app_context, exc) from exc
+
+        rendered_secrets = [
+            secret.model_copy(update={"value": revealed_by_key[secret.key].value})
+            for secret in secrets.secrets
+        ]
+
+    if app_context.options.output_json:
+        app_context.output.emit_json([secret.model_dump() for secret in rendered_secrets])
         return
 
     columns = ["Key", "Version", "Updated", "Updated By"]
@@ -243,7 +267,7 @@ def list_secrets(
         columns.append("Value")
 
     rows = []
-    for secret in secrets.secrets:
+    for secret in rendered_secrets:
         row = [
             secret.key,
             str(secret.version or 0),

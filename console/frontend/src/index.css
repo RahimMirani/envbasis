@@ -694,7 +694,9 @@ tbody tr:last-child td { border-bottom: none; }
 .onboarding-progress-fill { height: 100%; background: var(--text-primary); border-radius: var(--radius-full); transition: width var(--transition-slow); }
 .onboarding-progress-text { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 .onboarding-list { display: flex; flex-direction: column; gap: var(--space-2); }
-.onboarding-item { display: flex; align-items: center; gap: var(--space-3); font-size: 13px; color: var(--text-secondary); padding: 4px 0; }
+.onboarding-item { display: flex; align-items: center; gap: var(--space-3); width: 100%; font-size: 13px; color: var(--text-secondary); padding: 4px 0; background: transparent; border: 0; text-align: left; cursor: pointer; }
+.onboarding-item:hover { color: var(--text-primary); }
+.onboarding-item:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-sm); }
 .onboarding-item svg { color: var(--text-tertiary); flex-shrink: 0; }
 .onboarding-item-done { color: var(--text-tertiary); text-decoration: line-through; }
 .onboarding-item-done svg { color: var(--text-primary); }

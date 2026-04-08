@@ -4,10 +4,18 @@ const actionLabels: Record<string, string> = {
   secret_created: 'created a secret',
   secret_updated: 'updated a secret',
   secret_deleted: 'deleted a secret',
+  'secret.revealed': 'revealed a secret',
   secrets_pushed: 'pushed secrets',
   secrets_pulled: 'pulled secrets',
   environment_created: 'created an environment',
   member_invited: 'invited a member',
+  'invitation.created': 'sent a project invitation',
+  'invitation.resent': 'resent a project invitation',
+  'invitation.accepted': 'accepted a project invitation',
+  'invitation.rejected': 'declined a project invitation',
+  'invitation.revoked': 'revoked a project invitation',
+  'invitation.expired': 'an invitation expired',
+  'invitation.cooldown_blocked': 'invite rate limit hit',
   member_removed: 'removed a member',
   member_access_updated: 'updated member access',
   runtime_token_created: 'created a runtime token',
@@ -28,10 +36,18 @@ const actionColors: Record<string, string> = {
   secret_created: 'accent',
   secret_updated: 'accent',
   secret_deleted: 'danger',
+  'secret.revealed': 'warning',
   secrets_pushed: 'accent',
   secrets_pulled: 'info',
   environment_created: 'success',
   member_invited: 'info',
+  'invitation.created': 'info',
+  'invitation.resent': 'info',
+  'invitation.accepted': 'success',
+  'invitation.rejected': 'warning',
+  'invitation.revoked': 'danger',
+  'invitation.expired': 'neutral',
+  'invitation.cooldown_blocked': 'warning',
   member_removed: 'danger',
   member_access_updated: 'warning',
   runtime_token_created: 'success',
@@ -52,10 +68,18 @@ const actionIcons: Record<string, string> = {
   secret_created: 'key',
   secret_updated: 'key',
   secret_deleted: 'key',
+  'secret.revealed': 'key',
   secrets_pushed: 'key',
   secrets_pulled: 'pull',
   environment_created: 'environment',
   member_invited: 'member',
+  'invitation.created': 'member',
+  'invitation.resent': 'member',
+  'invitation.accepted': 'member',
+  'invitation.rejected': 'member',
+  'invitation.revoked': 'member',
+  'invitation.expired': 'member',
+  'invitation.cooldown_blocked': 'member',
   member_removed: 'member',
   member_access_updated: 'member',
   runtime_token_created: 'token',
@@ -94,6 +118,10 @@ export function getAuditDetails(log: AuditLog): string | null {
     return `Key: ${metadata.secret_key}`;
   }
 
+  if (typeof metadata.key === 'string') {
+    return `Key: ${metadata.key}`;
+  }
+
   if (typeof metadata.token_name === 'string') {
     return `Token: ${metadata.token_name}`;
   }
@@ -104,6 +132,10 @@ export function getAuditDetails(log: AuditLog): string | null {
 
   if (typeof metadata.environment_name === 'string') {
     return `Environment: ${metadata.environment_name}`;
+  }
+
+  if (typeof metadata.changed_count === 'number' && typeof metadata.unchanged_count === 'number') {
+    return `${metadata.changed_count} changed, ${metadata.unchanged_count} unchanged`;
   }
 
   if (typeof metadata.changed === 'number' && typeof metadata.unchanged === 'number') {
