@@ -10,6 +10,10 @@ class EnvironmentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
+class EnvironmentUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 class EnvironmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
