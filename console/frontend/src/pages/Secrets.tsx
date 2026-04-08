@@ -208,6 +208,7 @@ export default function SecretsPage() {
           visibleEnvironments.map((environment) =>
             listSecrets(currentProject.id, environment.id, accessToken!, {
               signal: controller.signal,
+              key: search || undefined,
             }).then((response) => ({
               environment,
               response,
@@ -266,11 +267,9 @@ export default function SecretsPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, secretAccessState, visibleEnvironments]);
+  }, [accessToken, apiConfigError, currentProject.id, secretAccessState, visibleEnvironments, search]);
 
-  const filteredSecrets = secrets.filter((secret) =>
-    secret.key.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredSecrets = secrets;
 
   const defaultEnvironmentId = getDefaultEnvironmentId(currentEnv, environments);
   const canUseSecrets = secretAccessState === 'enabled';
