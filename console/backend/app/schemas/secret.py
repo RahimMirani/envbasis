@@ -26,11 +26,22 @@ class SecretVersionRead(BaseModel):
 
 class SecretItemRead(BaseModel):
     key: str
+    version: int
+    updated_at: datetime
+    updated_by_user_id: uuid.UUID | None = None
+    updated_by_email: str | None = None
+
+
+class SecretRevealResponse(BaseModel):
+    project_id: uuid.UUID
+    environment_id: uuid.UUID
+    key: str
     value: str
     version: int
     updated_at: datetime
     updated_by_user_id: uuid.UUID | None = None
     updated_by_email: str | None = None
+    revealed_at: datetime
 
 
 class SecretListResponse(BaseModel):
