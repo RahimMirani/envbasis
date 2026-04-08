@@ -28,6 +28,7 @@ from app.schemas.environment import EnvironmentCreate, EnvironmentRead, Environm
 from app.schemas.invitation import InviteMemberResponse, ProjectInvitationRead
 from app.schemas.member import (
     MemberAccessUpdateRequest,
+    MemberBulkRevokeRequest,
     MemberInviteRequest,
     MemberRevokeRequest,
     ProjectMemberRead,
@@ -207,6 +208,173 @@ def _get_revealed_runtime_tokens_for_member(
             revealed_token_ids.add(token_id)
 
     return [shared_tokens_by_id[token_id] for token_id in revealed_token_ids]
+
+
+def _get_user_by_email_or_404(db: Session, *, email: str) -> User:
+    user = db.scalar(select(User).where(User.email == email))
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{email}' not found.",
+        )
+    return user
+
+
+def _build_member_revoke_context(
+    db: Session,
+    *,
+    project: Project,
+    email: str,
+) -> dict[str, object]:
+    revoked_user = _get_user_by_email_or_404(db, email=email)
+
+    if revoked_user.id == project.owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project owner cannot be revoked.",
+        )
+
+    membership = _get_project_member_or_404(
+        db,
+        project_id=project.id,
+        user_id=revoked_user.id,
+    )
+    shared_tokens = _get_shared_runtime_tokens_for_member(
+        db,
+        project_id=project.id,
+        user_id=revoked_user.id,
+    )
+    revealed_shared_tokens = _get_revealed_runtime_tokens_for_member(
+        db,
+        project_id=project.id,
+        user_id=revoked_user.id,
+        shared_tokens=shared_tokens,
+    )
+
+    return {
+        "user": revoked_user,
+        "membership": membership,
+        "shared_tokens": shared_tokens,
+        "revealed_shared_tokens": revealed_shared_tokens,
+    }
+
+
+def _raise_shared_token_revoke_conflict(
+    *,
+    contexts: list[dict[str, object]],
+    bulk: bool,
+) -> None:
+    conflict_members = [
+        {
+            "email": str(context["user"].email),
+            "shared_tokens": [
+                {"id": str(token.id), "name": token.name}
+                for token in context["shared_tokens"]
+            ],
+            "revealed_shared_tokens": [
+                {"id": str(token.id), "name": token.name}
+                for token in context["revealed_shared_tokens"]
+            ],
+        }
+        for context in contexts
+        if context["shared_tokens"]
+    ]
+    if not conflict_members:
+        return
+
+    if bulk:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "shared_runtime_token_confirmation_required",
+                "message": "One or more selected members have shared runtime tokens. Retry with shared_token_action set to 'keep_active' or 'revoke_tokens'.",
+                "members": conflict_members,
+            },
+        )
+
+    member_conflict = conflict_members[0]
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "shared_runtime_token_confirmation_required",
+            "message": "This member has shared runtime tokens. Retry with shared_token_action set to 'keep_active' or 'revoke_tokens'.",
+            "shared_token_count": len(member_conflict["shared_tokens"]),
+            "shared_tokens": member_conflict["shared_tokens"],
+            "revealed_shared_tokens": member_conflict["revealed_shared_tokens"],
+        },
+    )
+
+
+def _apply_member_revoke(
+    db: Session,
+    *,
+    project: Project,
+    current_user: User,
+    context: dict[str, object],
+    shared_token_action: str | None,
+) -> tuple[dict[str, object], str]:
+    revoked_user = context["user"]
+    membership = context["membership"]
+    shared_tokens = context["shared_tokens"]
+    revealed_shared_tokens = context["revealed_shared_tokens"]
+
+    token_ids = [token.id for token in shared_tokens]
+    share_rows = []
+    if token_ids:
+        share_rows = list(
+            db.scalars(
+                select(RuntimeTokenShare).where(
+                    RuntimeTokenShare.user_id == revoked_user.id,
+                    RuntimeTokenShare.runtime_token_id.in_(token_ids),
+                )
+            ).all()
+        )
+    for share in share_rows:
+        db.delete(share)
+
+    revoked_token_count = 0
+    if shared_token_action == "revoke_tokens":
+        for token in shared_tokens:
+            revoked_token_count += 1
+            write_audit_log(
+                db,
+                project_id=project.id,
+                environment_id=token.environment_id,
+                user_id=current_user.id,
+                action="runtime_token.revoked",
+                metadata={
+                    "token_id": str(token.id),
+                    "name": token.name,
+                    "reason": "member_removed",
+                    "removed_member_email": revoked_user.email,
+                },
+            )
+            db.delete(token)
+
+    db.delete(membership)
+    revoke_meta = {
+        "email": revoked_user.email,
+        "removed_shared_token_count": len(share_rows),
+        "removed_shared_token_names": [token.name for token in shared_tokens],
+        "revealed_shared_token_names": [token.name for token in revealed_shared_tokens],
+        "shared_token_action": shared_token_action or "not_applicable",
+        "revoked_runtime_token_count": revoked_token_count,
+    }
+    write_audit_log(
+        db,
+        project_id=project.id,
+        user_id=current_user.id,
+        action="member.revoked",
+        metadata=revoke_meta,
+    )
+
+    detail = "Member access revoked."
+    if share_rows:
+        detail += f" Removed {len(share_rows)} runtime token share(s)."
+    if revoked_token_count:
+        detail += f" Revoked {revoked_token_count} underlying runtime token(s)."
+
+    return revoke_meta, detail
 
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -609,107 +777,90 @@ def revoke_member(
     db: Session = Depends(get_db),
 ) -> MessageResponse:
     revoked_email = payload.email.strip().lower()
-    revoked_user = db.scalar(select(User).where(User.email == revoked_email))
-    if revoked_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
-
-    if revoked_user.id == project_access.project.owner_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Project owner cannot be revoked.",
-        )
-
-    membership = _get_project_member_or_404(
+    context = _build_member_revoke_context(
         db,
-        project_id=project_access.project.id,
-        user_id=revoked_user.id,
+        project=project_access.project,
+        email=revoked_email,
     )
-    shared_tokens = _get_shared_runtime_tokens_for_member(
+    if payload.shared_token_action is None:
+        _raise_shared_token_revoke_conflict(contexts=[context], bulk=False)
+    revoke_meta, detail = _apply_member_revoke(
         db,
-        project_id=project_access.project.id,
-        user_id=revoked_user.id,
-    )
-    revealed_shared_tokens = _get_revealed_runtime_tokens_for_member(
-        db,
-        project_id=project_access.project.id,
-        user_id=revoked_user.id,
-        shared_tokens=shared_tokens,
-    )
-    if shared_tokens and payload.shared_token_action is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "shared_runtime_token_confirmation_required",
-                "message": "This member has shared runtime tokens. Retry with shared_token_action set to 'keep_active' or 'revoke_tokens'.",
-                "shared_token_count": len(shared_tokens),
-                "shared_tokens": [
-                    {"id": str(token.id), "name": token.name}
-                    for token in shared_tokens
-                ],
-                "revealed_shared_tokens": [
-                    {"id": str(token.id), "name": token.name}
-                    for token in revealed_shared_tokens
-                ],
-            },
-        )
-    token_ids = [token.id for token in shared_tokens]
-    share_rows = []
-    if token_ids:
-        share_rows = list(
-            db.scalars(
-                select(RuntimeTokenShare).where(
-                    RuntimeTokenShare.user_id == revoked_user.id,
-                    RuntimeTokenShare.runtime_token_id.in_(token_ids),
-                )
-            ).all()
-        )
-    for share in share_rows:
-        db.delete(share)
-
-    revoked_token_count = 0
-    if payload.shared_token_action == "revoke_tokens":
-        for token in shared_tokens:
-            revoked_token_count += 1
-            write_audit_log(
-                db,
-                project_id=project_access.project.id,
-                environment_id=token.environment_id,
-                user_id=current_user.id,
-                action="runtime_token.revoked",
-                metadata={
-                    "token_id": str(token.id),
-                    "name": token.name,
-                    "reason": "member_removed",
-                    "removed_member_email": revoked_user.email,
-                },
-            )
-            db.delete(token)
-
-    db.delete(membership)
-    revoke_meta = {
-        "email": revoked_user.email,
-        "removed_shared_token_count": len(share_rows),
-        "removed_shared_token_names": [token.name for token in shared_tokens],
-        "revealed_shared_token_names": [token.name for token in revealed_shared_tokens],
-        "shared_token_action": payload.shared_token_action or "not_applicable",
-        "revoked_runtime_token_count": revoked_token_count,
-    }
-    write_audit_log(
-        db,
-        project_id=project_access.project.id,
-        user_id=current_user.id,
-        action="member.revoked",
-        metadata=revoke_meta,
+        project=project_access.project,
+        current_user=current_user,
+        context=context,
+        shared_token_action=payload.shared_token_action,
     )
     webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="member.revoked")
     db.commit()
     dispatch_webhooks(webhook_targets, event="member.revoked", project_id=project_access.project.id, environment_id=None, actor_user_id=current_user.id, metadata=revoke_meta)
-    detail = "Member access revoked."
-    if share_rows:
-        detail += f" Removed {len(share_rows)} runtime token share(s)."
-    if revoked_token_count:
-        detail += f" Revoked {revoked_token_count} underlying runtime token(s)."
     return MessageResponse(detail=detail)
+
+
+@router.post("/{project_id}/members/bulk-revoke", response_model=MessageResponse)
+def bulk_revoke_members(
+    payload: MemberBulkRevokeRequest,
+    project_access: ProjectAccess = Depends(require_project_owner),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    normalized_emails: list[str] = []
+    seen_emails: set[str] = set()
+    for raw_email in payload.emails:
+        email = str(raw_email).strip().lower()
+        if email in seen_emails:
+            continue
+        seen_emails.add(email)
+        normalized_emails.append(email)
+
+    contexts = [
+        _build_member_revoke_context(
+            db,
+            project=project_access.project,
+            email=email,
+        )
+        for email in normalized_emails
+    ]
+    if payload.shared_token_action is None:
+        _raise_shared_token_revoke_conflict(contexts=contexts, bulk=True)
+
+    revoke_metas: list[dict[str, object]] = []
+    for context in contexts:
+        revoke_meta, _detail = _apply_member_revoke(
+            db,
+            project=project_access.project,
+            current_user=current_user,
+            context=context,
+            shared_token_action=payload.shared_token_action,
+        )
+        revoke_metas.append(revoke_meta)
+
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="members.bulk_revoked",
+        metadata={
+            "count": len(revoke_metas),
+            "emails": [str(meta["email"]) for meta in revoke_metas],
+            "shared_token_action": payload.shared_token_action or "not_applicable",
+        },
+    )
+    webhook_targets = get_webhooks_for_event(
+        db,
+        project_id=project_access.project.id,
+        action="member.revoked",
+    )
+    db.commit()
+
+    for revoke_meta in revoke_metas:
+        dispatch_webhooks(
+            webhook_targets,
+            event="member.revoked",
+            project_id=project_access.project.id,
+            environment_id=None,
+            actor_user_id=current_user.id,
+            metadata=revoke_meta,
+        )
+
+    return MessageResponse(detail=f"Revoked {len(revoke_metas)} member(s).")
