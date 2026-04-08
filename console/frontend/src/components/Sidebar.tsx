@@ -12,6 +12,7 @@ import {
   Settings,
   ScrollText,
   LogOut,
+  Webhook,
 } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
@@ -55,6 +56,7 @@ export default function Sidebar({
     { to: `${basePath}/team`, icon: Users, label: 'Team' },
     { to: `${basePath}/tokens`, icon: Ticket, label: 'Runtime Tokens' },
     { to: `${basePath}/audit`, icon: ScrollText, label: 'Audit Logs' },
+    { to: `${basePath}/webhooks`, icon: Webhook, label: 'Webhooks' },
     { to: `${basePath}/settings`, icon: Settings, label: 'Settings' },
   ];
 
