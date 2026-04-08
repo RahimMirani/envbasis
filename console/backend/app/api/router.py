@@ -10,6 +10,7 @@ from app.api.routes.projects import router as projects_router
 from app.api.routes.runtime import router as runtime_router
 from app.api.routes.runtime_tokens import router as runtime_tokens_router
 from app.api.routes.secrets import router as secrets_router
+from app.api.routes.webhooks import router as webhooks_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, tags=["auth"])
@@ -22,3 +23,4 @@ api_router.include_router(projects_router, tags=["projects"])
 api_router.include_router(runtime_router, tags=["runtime"])
 api_router.include_router(secrets_router, tags=["secrets"])
 api_router.include_router(runtime_tokens_router, tags=["runtime-tokens"])
+api_router.include_router(webhooks_router, tags=["webhooks"])
