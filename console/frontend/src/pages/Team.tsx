@@ -73,6 +73,7 @@ export default function TeamPage() {
   const [isInviting, setIsInviting] = useState(false);
   const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
   const [revokeConflict, setRevokeConflict] = useState<RevokeConflict | null>(null);
+  const [keepActiveConfirm, setKeepActiveConfirm] = useState(false);
   const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>([]);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
 
@@ -234,13 +235,11 @@ export default function TeamPage() {
       );
       onMemberCountChanged(-1);
       setRevokeConflict(null);
+      setKeepActiveConfirm(false);
     } catch (revokeErrorValue) {
       const apiError = revokeErrorValue as ApiError;
       const detail = (apiError.details as ApiErrorDetails)?.detail;
-      if (
-        detail?.code === 'shared_runtime_token_confirmation_required' ||
-        detail?.code === 'revealed_runtime_tokens_require_revocation'
-      ) {
+      if (detail?.code === 'shared_runtime_token_confirmation_required') {
         setRevokeConflict({
           member,
           detail,
@@ -476,37 +475,47 @@ export default function TeamPage() {
 
       <Modal
         isOpen={Boolean(revokeConflict)}
-        onClose={() => setRevokeConflict(null)}
+        onClose={() => {
+          setRevokeConflict(null);
+          setKeepActiveConfirm(false);
+        }}
         title="Revoke Member Access"
         footer={
-          revokeConflict?.detail?.code === 'shared_runtime_token_confirmation_required' ? (
+          keepActiveConfirm ? (
             <>
-              <button className="btn btn-secondary" onClick={() => setRevokeConflict(null)}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setKeepActiveConfirm(false)}
+              >
+                Back
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => revokeConflict && attemptRevokeMember(revokeConflict.member, 'keep_active')}
+              >
+                Yes, Keep Tokens Active
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setRevokeConflict(null);
+                  setKeepActiveConfirm(false);
+                }}
+              >
                 Cancel
               </button>
               <button
                 className="btn btn-secondary"
-                onClick={() => attemptRevokeMember(revokeConflict.member, 'keep_active')}
+                onClick={() => setKeepActiveConfirm(true)}
               >
                 Keep Tokens Active
               </button>
               <button
                 className="btn btn-danger"
-                onClick={() => attemptRevokeMember(revokeConflict.member, 'revoke_tokens')}
-              >
-                Revoke Tokens Too
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="btn btn-secondary" onClick={() => setRevokeConflict(null)}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-danger"
-                onClick={() =>
-                  revokeConflict && attemptRevokeMember(revokeConflict.member, 'revoke_tokens')
-                }
+                onClick={() => revokeConflict && attemptRevokeMember(revokeConflict.member, 'revoke_tokens')}
               >
                 Revoke Tokens Too
               </button>
@@ -516,24 +525,42 @@ export default function TeamPage() {
       >
         {revokeConflict && (
           <>
-            <p className="team-modal-copy">{revokeConflict.detail.message}</p>
-            {Array.isArray(revokeConflict.detail.shared_tokens) &&
-              revokeConflict.detail.shared_tokens.length > 0 && (
-                <div className="team-token-list">
-                  {revokeConflict.detail.shared_tokens.map((token) => (
-                    <span className="badge badge-neutral" key={token.id}>
-                      {token.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-            {Array.isArray(revokeConflict.detail.revealed_shared_tokens) &&
-              revokeConflict.detail.revealed_shared_tokens.length > 0 && (
-                <p className="team-error">
-                  Revealed tokens:{' '}
-                  {revokeConflict.detail.revealed_shared_tokens.map((token) => token.name).join(', ')}
+            {keepActiveConfirm ? (
+              <p className="team-modal-copy">
+                Are you sure you want to keep these tokens active? The member will lose access to the
+                project, but the tokens will remain usable.
+              </p>
+            ) : (
+              <>
+                <p className="team-modal-copy">
+                  This member has shared runtime tokens. Choose whether to keep them active or revoke them.
                 </p>
-              )}
+                {Array.isArray(revokeConflict.detail.shared_tokens) &&
+                  revokeConflict.detail.shared_tokens.length > 0 && (
+                    <div className="team-token-list">
+                      <p className="team-modal-copy" style={{ marginBottom: 6 }}>Shared tokens:</p>
+                      {revokeConflict.detail.shared_tokens.map((token) => (
+                        <span className="badge badge-neutral" key={token.id}>
+                          {token.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                {Array.isArray(revokeConflict.detail.revealed_shared_tokens) &&
+                  revokeConflict.detail.revealed_shared_tokens.length > 0 && (
+                    <div className="team-token-list" style={{ marginTop: 12 }}>
+                      <p className="team-modal-copy" style={{ marginBottom: 6 }}>
+                        Already revealed by this member:
+                      </p>
+                      {revokeConflict.detail.revealed_shared_tokens.map((token) => (
+                        <span className="badge badge-warning" key={token.id}>
+                          {token.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+              </>
+            )}
           </>
         )}
       </Modal>
