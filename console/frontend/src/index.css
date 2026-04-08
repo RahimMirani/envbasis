@@ -216,6 +216,7 @@ tbody td { padding: var(--space-3) var(--space-4); font-size: var(--text-sm); co
 tbody tr { transition: background var(--transition-fast); }
 tbody tr:hover { background: var(--accent-subtle); }
 tbody tr:last-child td { border-bottom: none; }
+.table-checkbox-cell { width: 40px; }
 
 /* Badges */
 .badge { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px 6px; font-size: 11px; font-weight: 500; border-radius: var(--radius-sm); border: 1px solid transparent; }
@@ -712,6 +713,8 @@ tbody tr:last-child td { border-bottom: none; }
 .secrets-search { position: relative; flex: 1; max-width: 320px; }
 .secrets-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); }
 .secrets-search-input { padding-left: 32px; height: 32px; }
+.secrets-toolbar-meta { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; justify-content: flex-end; }
+.secrets-selected-count { font-size: 12px; color: var(--warning); }
 .secrets-count { font-size: 12px; color: var(--text-tertiary); }
 .secret-key { font-family: var(--font-mono); font-size: 12px; font-weight: 500; color: var(--text-primary); background: var(--bg-primary); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-light); }
 .secret-value { font-size: 12px; color: var(--text-tertiary); letter-spacing: 0.1em; }
@@ -762,6 +765,8 @@ tbody tr:last-child td { border-bottom: none; }
 .team-error { margin-top: var(--space-3); font-size: 13px; color: var(--danger); }
 .team-modal-copy { font-size: 13px; line-height: 1.5; }
 .team-token-list { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+.team-bulk-conflict-block { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-light); }
+.team-bulk-conflict-block:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .invite-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-top: var(--space-2); }
 
 /* ==========================================
@@ -907,4 +912,7 @@ tbody tr:last-child td { border-bottom: none; }
   .cli-auth-card { padding: var(--space-5); }
   .cli-auth-code-input { font-size: var(--text-md); }
   .cli-auth-meta-row { grid-template-columns: 1fr; gap: var(--space-1); }
+  .secrets-toolbar { align-items: stretch; flex-direction: column; }
+  .secrets-search { max-width: none; }
+  .secrets-toolbar-meta { justify-content: flex-start; }
 }
