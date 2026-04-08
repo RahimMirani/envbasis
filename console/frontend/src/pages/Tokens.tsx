@@ -11,6 +11,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
@@ -144,6 +145,9 @@ export default function TokensPage() {
   const [copiedToken, setCopiedToken] = useState(false);
   const [activeTokenId, setActiveTokenId] = useState<string | null>(null);
   const [tokenPendingRevoke, setTokenPendingRevoke] = useState<RuntimeToken | null>(null);
+  const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
+  const [isBulkRevoking, setIsBulkRevoking] = useState(false);
+  const [showBulkRevokeConfirm, setShowBulkRevokeConfirm] = useState(false);
 
   const environmentById = useMemo(
     () => Object.fromEntries(environments.map((environment) => [environment.id, environment])),
@@ -157,6 +161,27 @@ export default function TokensPage() {
 
     return tokens.filter((token) => environmentById[token.environment_id]?.name === currentEnv);
   }, [currentEnv, environmentById, tokens]);
+
+  const revokeableTokenIds = useMemo(
+    () =>
+      visibleTokens
+        .filter((token) => getRuntimeTokenStatus(token) !== 'revoked')
+        .map((token) => token.id),
+    [visibleTokens]
+  );
+  const selectedTokens = useMemo(
+    () => visibleTokens.filter((token) => selectedTokenIds.includes(token.id)),
+    [visibleTokens, selectedTokenIds]
+  );
+  const allRevokeableSelected =
+    revokeableTokenIds.length > 0 &&
+    revokeableTokenIds.every((id) => selectedTokenIds.includes(id));
+
+  useEffect(() => {
+    setSelectedTokenIds((current) =>
+      current.filter((id) => visibleTokens.some((token) => token.id === id))
+    );
+  }, [visibleTokens]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -421,6 +446,45 @@ export default function TokensPage() {
     }
   };
 
+  const toggleTokenSelection = (tokenId: string) => {
+    setSelectedTokenIds((current) =>
+      current.includes(tokenId)
+        ? current.filter((id) => id !== tokenId)
+        : [...current, tokenId]
+    );
+  };
+
+  const toggleSelectAllTokens = () => {
+    if (allRevokeableSelected) {
+      setSelectedTokenIds([]);
+      return;
+    }
+    setSelectedTokenIds(revokeableTokenIds);
+  };
+
+  const handleBulkRevokeTokens = async () => {
+    if (selectedTokens.length === 0) {
+      setShowBulkRevokeConfirm(false);
+      return;
+    }
+    setIsBulkRevoking(true);
+    setError(null);
+    try {
+      const toRevoke = selectedTokens.filter(
+        (token) => getRuntimeTokenStatus(token) !== 'revoked'
+      );
+      await Promise.all(toRevoke.map((token) => revokeRuntimeToken(token.id, accessToken!)));
+      onRuntimeTokenCountChanged(-toRevoke.length);
+      setSelectedTokenIds([]);
+      setShowBulkRevokeConfirm(false);
+      await reloadTokens();
+    } catch (bulkRevokeError) {
+      setError((bulkRevokeError as Error).message || 'Failed to revoke selected tokens.');
+    } finally {
+      setIsBulkRevoking(false);
+    }
+  };
+
   const handleCopyToken = (value: string) => {
     navigator.clipboard.writeText(value);
     setCopiedToken(true);
@@ -450,6 +514,16 @@ export default function TokensPage() {
           </p>
         </div>
         <div className="page-header-actions">
+          {canManageProject && (
+            <button
+              className="btn btn-danger"
+              onClick={() => setShowBulkRevokeConfirm(true)}
+              disabled={selectedTokenIds.length === 0 || isBulkRevoking}
+            >
+              <ShieldX size={14} />
+              Revoke Selected
+            </button>
+          )}
           <button
             className="btn btn-primary"
             onClick={openCreateModal}
@@ -511,6 +585,17 @@ export default function TokensPage() {
             <table id="tokens-table">
               <thead>
                 <tr>
+                  {canManageProject && (
+                    <th style={{ width: 40 }}>
+                      <Checkbox
+                        checked={allRevokeableSelected}
+                        indeterminate={selectedTokenIds.length > 0 && !allRevokeableSelected}
+                        onChange={toggleSelectAllTokens}
+                        aria-label="Select all tokens"
+                        disabled={isBulkRevoking || revokeableTokenIds.length === 0}
+                      />
+                    </th>
+                  )}
                   <th>Name</th>
                   <th>Environment</th>
                   <th>Created By</th>
@@ -531,6 +616,18 @@ export default function TokensPage() {
 
                   return (
                     <tr key={token.id}>
+                      {canManageProject && (
+                        <td className="table-checkbox-cell">
+                          {status !== 'revoked' && (
+                            <Checkbox
+                              checked={selectedTokenIds.includes(token.id)}
+                              onChange={() => toggleTokenSelection(token.id)}
+                              aria-label={`Select token ${token.name}`}
+                              disabled={isBulkRevoking || isBusy}
+                            />
+                          )}
+                        </td>
+                      )}
                       <td>
                         <code className="secret-key">{token.name}</code>
                       </td>
@@ -792,6 +889,19 @@ export default function TokensPage() {
           }
         }}
         isBusy={Boolean(activeTokenId)}
+      />
+      <ConfirmDialog
+        isOpen={showBulkRevokeConfirm}
+        title="Revoke Selected Tokens"
+        description={`Revoke ${selectedTokens.length} selected token${selectedTokens.length !== 1 ? 's' : ''}? This cannot be undone.`}
+        confirmLabel="Revoke Tokens"
+        onConfirm={() => { void handleBulkRevokeTokens(); }}
+        onClose={() => {
+          if (!isBulkRevoking) {
+            setShowBulkRevokeConfirm(false);
+          }
+        }}
+        isBusy={isBulkRevoking}
       />
     </div>
   );
