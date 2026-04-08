@@ -31,6 +31,7 @@ export interface Secret {
   environment_id: string;
   environment?: string;
   updated_at: string;
+  expires_at: string | null;
   updated_by_email: string | null;
 }
 
@@ -40,6 +41,7 @@ export interface RevealedSecret {
   version: number;
   environment_id: string;
   updated_at: string;
+  expires_at: string | null;
   updated_by_email: string | null;
   revealed_at: string;
 }
@@ -184,6 +186,11 @@ export interface ApiErrorDetails {
     code?: string;
     shared_tokens?: Array<{ id: string; name: string }>;
     revealed_shared_tokens?: Array<{ id: string; name: string }>;
+    members?: Array<{
+      email: string;
+      shared_tokens: Array<{ id: string; name: string }>;
+      revealed_shared_tokens: Array<{ id: string; name: string }>;
+    }>;
   };
 }
 
