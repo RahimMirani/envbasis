@@ -24,7 +24,7 @@ from app.models.runtime_token import RuntimeToken
 from app.models.runtime_token_share import RuntimeTokenShare
 from app.models.user import User
 from app.schemas.common import MessageResponse
-from app.schemas.environment import EnvironmentCreate, EnvironmentRead
+from app.schemas.environment import EnvironmentCreate, EnvironmentRead, EnvironmentUpdate
 from app.schemas.invitation import InviteMemberResponse, ProjectInvitationRead
 from app.schemas.member import (
     MemberAccessUpdateRequest,
@@ -34,6 +34,8 @@ from app.schemas.member import (
 )
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from app.services.audit import write_audit_log
+from app.services.environments import get_project_environment_or_404
+from app.services.webhooks import dispatch_webhooks, get_webhooks_for_event
 from app.services.invitation_service import (
     create_or_resend_invitation,
     list_project_invitations,
@@ -404,6 +406,77 @@ def list_environments(
     return list(environments)
 
 
+@router.patch("/{project_id}/environments/{environment_id}", response_model=EnvironmentRead)
+def rename_environment(
+    environment_id: uuid.UUID,
+    payload: EnvironmentUpdate,
+    project_access: ProjectAccess = Depends(require_project_owner),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Environment:
+    environment = get_project_environment_or_404(db, project=project_access.project, environment_id=environment_id)
+
+    new_name = payload.name.strip()
+    if not new_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Environment name cannot be empty.",
+        )
+
+    if new_name == environment.name:
+        return environment
+
+    existing = db.scalar(
+        select(Environment).where(
+            Environment.project_id == project_access.project.id,
+            Environment.name == new_name,
+            Environment.id != environment_id,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An environment with that name already exists in this project.",
+        )
+
+    old_name = environment.name
+    environment.name = new_name
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        environment_id=environment.id,
+        user_id=current_user.id,
+        action="environment.renamed",
+        metadata={"old_name": old_name, "new_name": new_name},
+    )
+    db.commit()
+    db.refresh(environment)
+    return environment
+
+
+@router.delete("/{project_id}/environments/{environment_id}", response_model=MessageResponse)
+def delete_environment(
+    environment_id: uuid.UUID,
+    project_access: ProjectAccess = Depends(require_project_owner),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    environment = get_project_environment_or_404(db, project=project_access.project, environment_id=environment_id)
+
+    environment_name = environment.name
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        environment_id=None,
+        user_id=current_user.id,
+        action="environment.deleted",
+        metadata={"environment_name": environment_name},
+    )
+    db.delete(environment)
+    db.commit()
+    return MessageResponse(detail=f"Environment '{environment_name}' deleted.")
+
+
 @router.get("/{project_id}/members", response_model=list[ProjectMemberRead])
 def list_members(
     project_access: ProjectAccess = Depends(get_project_access),
@@ -616,21 +689,24 @@ def revoke_member(
             db.delete(token)
 
     db.delete(membership)
+    revoke_meta = {
+        "email": revoked_user.email,
+        "removed_shared_token_count": len(share_rows),
+        "removed_shared_token_names": [token.name for token in shared_tokens],
+        "revealed_shared_token_names": [token.name for token in revealed_shared_tokens],
+        "shared_token_action": payload.shared_token_action or "not_applicable",
+        "revoked_runtime_token_count": revoked_token_count,
+    }
     write_audit_log(
         db,
         project_id=project_access.project.id,
         user_id=current_user.id,
         action="member.revoked",
-        metadata={
-            "email": revoked_user.email,
-            "removed_shared_token_count": len(share_rows),
-            "removed_shared_token_names": [token.name for token in shared_tokens],
-            "revealed_shared_token_names": [token.name for token in revealed_shared_tokens],
-            "shared_token_action": payload.shared_token_action or "not_applicable",
-            "revoked_runtime_token_count": revoked_token_count,
-        },
+        metadata=revoke_meta,
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="member.revoked")
     db.commit()
+    dispatch_webhooks(webhook_targets, event="member.revoked", project_id=project_access.project.id, environment_id=None, actor_user_id=current_user.id, metadata=revoke_meta)
     detail = "Member access revoked."
     if share_rows:
         detail += f" Removed {len(share_rows)} runtime token share(s)."
