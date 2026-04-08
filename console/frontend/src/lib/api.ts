@@ -286,7 +286,7 @@ export function createSecret(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  body: { key: string; value: string },
+  body: { key: string; value: string; expires_at?: string | null },
   options: RequestOptions = {}
 ): Promise<Secret> {
   return apiRequest<Secret>(
@@ -305,7 +305,7 @@ export function updateSecret(
   environmentId: string,
   secretKey: string,
   accessToken: string,
-  body: { value: string },
+  body: { value: string; expires_at?: string | null },
   options: RequestOptions = {}
 ): Promise<Secret> {
   return apiRequest<Secret>(
@@ -334,6 +334,20 @@ export function deleteSecret(
       accessToken,
     }
   );
+}
+
+export function bulkDeleteSecrets(
+  projectId: string,
+  accessToken: string,
+  body: { items: Array<{ environment_id: string; key: string }> },
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(`/projects/${encodePathSegment(projectId)}/secrets/bulk-delete`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
 }
 
 export function getProjectSecretStats(
@@ -506,6 +520,20 @@ export function revokeMember(
   options: RequestOptions = {}
 ): Promise<void> {
   return apiRequest<void>(`/projects/${encodePathSegment(projectId)}/revoke`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
+}
+
+export function bulkRevokeMembers(
+  projectId: string,
+  accessToken: string,
+  body: { emails: string[]; shared_token_action?: string },
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(`/projects/${encodePathSegment(projectId)}/members/bulk-revoke`, {
     ...options,
     method: 'POST',
     accessToken,
