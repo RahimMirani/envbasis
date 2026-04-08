@@ -27,12 +27,21 @@ export interface Environment {
 
 export interface Secret {
   key: string;
-  value: string;
   version: number;
   environment_id: string;
   environment?: string;
   updated_at: string;
   updated_by_email: string | null;
+}
+
+export interface RevealedSecret {
+  key: string;
+  value: string;
+  version: number;
+  environment_id: string;
+  updated_at: string;
+  updated_by_email: string | null;
+  revealed_at: string;
 }
 
 export interface SecretListResponse {
