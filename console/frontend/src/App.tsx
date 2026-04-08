@@ -13,6 +13,7 @@ import TeamPage from './pages/Team';
 import TokensPage from './pages/Tokens';
 import AuditLogsPage from './pages/AuditLogs';
 import SettingsPage from './pages/Settings';
+import WebhooksPage from './pages/Webhooks';
 
 export default function App() {
   return (
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="team" element={<TeamPage />} />
           <Route path="tokens" element={<TokensPage />} />
           <Route path="audit" element={<AuditLogsPage />} />
+          <Route path="webhooks" element={<WebhooksPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
