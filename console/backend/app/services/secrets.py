@@ -78,6 +78,7 @@ def get_latest_secret_rows(
     *,
     environment_id: uuid.UUID,
     include_deleted: bool = False,
+    key_filter: str | None = None,
 ) -> list[Secret]:
     latest_versions = (
         select(
@@ -101,6 +102,8 @@ def get_latest_secret_rows(
     )
     if not include_deleted:
         stmt = stmt.where(Secret.is_deleted.is_(False))
+    if key_filter:
+        stmt = stmt.where(Secret.key.ilike(f"%{key_filter}%"))
 
     rows = db.execute(stmt).scalars().all()
     return list(rows)
