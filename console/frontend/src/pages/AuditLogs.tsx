@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Filter,
   ArrowDownToLine,
   CirclePlus,
   ShieldAlert,
@@ -10,6 +9,7 @@ import {
   FolderKanban,
   Activity,
   LucideIcon,
+  X,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import DashboardLoader from '../components/DashboardLoader';
@@ -41,9 +41,47 @@ const auditIcons: Record<string, LucideIcon> = {
   activity: Activity,
 };
 
-interface FilterOption {
-  value: string;
+interface DateGroup {
   label: string;
+  key: string;
+  logs: AuditLog[];
+}
+
+function groupLogsByDate(logs: AuditLog[]): DateGroup[] {
+  const groups: DateGroup[] = [];
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const todayStr = today.toDateString();
+  const yesterdayStr = yesterday.toDateString();
+
+  for (const log of logs) {
+    const logDate = new Date(log.created_at);
+    const logDateStr = logDate.toDateString();
+
+    let label: string;
+    if (logDateStr === todayStr) {
+      label = 'Today';
+    } else if (logDateStr === yesterdayStr) {
+      label = 'Yesterday';
+    } else {
+      label = logDate.toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        ...(logDate.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
+      });
+    }
+
+    const existing = groups.find((g) => g.key === logDateStr);
+    if (existing) {
+      existing.logs.push(log);
+    } else {
+      groups.push({ label, key: logDateStr, logs: [log] });
+    }
+  }
+
+  return groups;
 }
 
 export default function AuditLogsPage() {
@@ -132,8 +170,10 @@ export default function AuditLogsPage() {
     [filterAction, filterEnv, filterSource, logs]
   );
 
+  const dateGroups = useMemo(() => groupLogsByDate(filteredLogs), [filteredLogs]);
+
   const uniqueActions = useMemo(() => [...new Set(logs.map((log) => log.action))], [logs]);
-  const actionOptions = useMemo<FilterOption[]>(
+  const actionOptions = useMemo(
     () => [
       { value: 'all', label: 'All actions' },
       ...uniqueActions.map((action) => ({
@@ -143,7 +183,7 @@ export default function AuditLogsPage() {
     ],
     [uniqueActions]
   );
-  const environmentOptions = useMemo<FilterOption[]>(
+  const environmentOptions = useMemo(
     () => [
       { value: 'all', label: 'All environments' },
       ...[...new Set(logs.map((log) => log.environment_name).filter(Boolean))].map(
@@ -157,10 +197,17 @@ export default function AuditLogsPage() {
   );
 
   const sourceOptions = [
-    { value: 'all', label: 'All sources' },
+    { value: 'all', label: 'All' },
     { value: 'project', label: 'Project' },
-    { value: 'cli_auth', label: 'CLI auth' },
+    { value: 'cli_auth', label: 'CLI Auth' },
   ] as const;
+
+  const hasActiveFilters = filterAction !== 'all' || filterEnv !== 'all';
+
+  const handleClearFilters = () => {
+    setFilterAction('all');
+    setFilterEnv(currentEnv === 'all' ? 'all' : currentEnv);
+  };
 
   const handleExport = async (format: 'csv' | 'json') => {
     if (!accessToken || isExporting) return;
@@ -209,22 +256,22 @@ export default function AuditLogsPage() {
         </div>
         <div className="page-header-actions">
           <button
-            className="btn btn-secondary"
+            className="btn btn-secondary btn-sm"
             onClick={() => { void handleExport('csv'); }}
             disabled={isExporting || logs.length === 0}
             title="Export as CSV"
           >
-            <ArrowDownToLine size={14} />
-            {isExporting ? 'Exporting...' : 'CSV'}
+            <ArrowDownToLine size={13} />
+            {isExporting ? 'Exporting…' : 'Export CSV'}
           </button>
           <button
-            className="btn btn-secondary"
+            className="btn btn-secondary btn-sm"
             onClick={() => { void handleExport('json'); }}
             disabled={isExporting || logs.length === 0}
             title="Export as JSON"
           >
-            <ArrowDownToLine size={14} />
-            JSON
+            <ArrowDownToLine size={13} />
+            Export JSON
           </button>
         </div>
       </div>
@@ -251,126 +298,136 @@ export default function AuditLogsPage() {
         </div>
       ) : (
         <>
-          <div className="audit-filters">
-            <div className="audit-filter-heading">
-              <Filter size={13} />
-              <span>Filters</span>
-            </div>
-
-            <div className="audit-filter-groups">
-              <label className="audit-filter-control" htmlFor="audit-filter-source">
-                <span className="audit-filter-label">Source</span>
-                <select
-                  className="input select audit-filter-select"
-                  value={filterSource}
-                  onChange={(event) =>
-                    setFilterSource(event.target.value as 'all' | 'project' | 'cli_auth')
+          <div className="audit-filter-bar">
+            <div className="audit-source-pills">
+              {sourceOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`audit-source-pill${filterSource === option.value ? ' audit-source-pill-active' : ''}`}
+                  onClick={() =>
+                    setFilterSource(option.value as 'all' | 'project' | 'cli_auth')
                   }
-                  id="audit-filter-source"
                 >
-                  {sourceOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="audit-filter-control" htmlFor="audit-filter-action">
-                <span className="audit-filter-label">Action</span>
-                <select
-                  className="input select audit-filter-select"
-                  value={filterAction}
-                  onChange={(event) => setFilterAction(event.target.value)}
-                  id="audit-filter-action"
-                >
-                  {actionOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="audit-filter-control" htmlFor="audit-filter-env">
-                <div className="audit-filter-label-row">
-                  <span className="audit-filter-label">Environment</span>
-                  {filterSource === 'cli_auth' && (
-                    <span className="audit-filter-hint">Project-only</span>
-                  )}
-                </div>
-                <select
-                  className="input select audit-filter-select"
-                  value={filterEnv}
-                  onChange={(event) => setFilterEnv(event.target.value)}
-                  id="audit-filter-env"
-                  disabled={filterSource === 'cli_auth'}
-                >
-                  {environmentOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  {option.label}
+                </button>
+              ))}
             </div>
+
+            <div className="audit-filter-divider" />
+
+            <select
+              className="input select audit-filter-select-compact"
+              value={filterAction}
+              onChange={(event) => setFilterAction(event.target.value)}
+              aria-label="Filter by action"
+            >
+              {actionOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input select audit-filter-select-compact"
+              value={filterEnv}
+              onChange={(event) => setFilterEnv(event.target.value)}
+              disabled={filterSource === 'cli_auth'}
+              aria-label="Filter by environment"
+            >
+              {environmentOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+
+            {hasActiveFilters && (
+              <button className="audit-clear-btn" onClick={handleClearFilters}>
+                <X size={11} />
+                Clear
+              </button>
+            )}
 
             <span className="audit-count">
               {filteredLogs.length} event{filteredLogs.length !== 1 ? 's' : ''}
             </span>
           </div>
 
-          <div className="card">
-            <div className="audit-timeline">
-              {filteredLogs.map((log) => {
-                const iconKey = getAuditIconKey(log.action);
-                const Icon = auditIcons[iconKey] || Activity;
-                const color = getAuditColor(log.action);
-                const details = getAuditDetails(log);
-
-                return (
-                  <div className="audit-event" key={log.id}>
-                    <div className={`audit-event-icon activity-icon-${color}`}>
-                      <Icon size={14} />
-                    </div>
-                    <div className="audit-event-content">
-                      <div className="audit-event-main">
-                        <span className="audit-event-actor">
-                          {getUserDisplayName({ email: log.actor_email })}
-                        </span>
-                        <span className="audit-event-action">{getAuditActionLabel(log.action)}</span>
-                        <span
-                          className={`badge ${log.source === 'cli_auth' ? 'badge-info' : 'badge-neutral'}`}
-                        >
-                          {log.source === 'cli_auth' ? 'CLI Auth' : 'Project'}
-                        </span>
-                        {log.environment_name && (
-                          <span className={`badge badge-env badge-env-${log.environment_name}`}>
-                            {log.environment_name}
-                          </span>
-                        )}
-                      </div>
-                      <div className="audit-event-meta">
-                        <span className="audit-event-details">
-                          {details || 'No additional details.'}
-                        </span>
-                        <span className="audit-event-time">
-                          {formatRelativeTime(log.created_at)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+          {filteredLogs.length === 0 ? (
+            <div className="empty-state">
+              <h3>No matching events</h3>
+              <p>Try adjusting your filters to see more results.</p>
             </div>
-            {nextCursor && (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem 1.25rem 1.25rem' }}>
-                <button className="btn btn-secondary btn-sm" onClick={handleLoadMore} disabled={isLoadingMore}>
-                  {isLoadingMore ? 'Loading...' : 'Load More'}
-                </button>
+          ) : (
+            <div className="card">
+              <div className="audit-timeline">
+                {dateGroups.map((group) => (
+                  <div key={group.key} className="audit-date-group">
+                    <div className="audit-date-header">{group.label}</div>
+                    {group.logs.map((log) => {
+                      const iconKey = getAuditIconKey(log.action);
+                      const Icon = auditIcons[iconKey] || Activity;
+                      const color = getAuditColor(log.action);
+                      const details = getAuditDetails(log);
+
+                      return (
+                        <div className="audit-event" key={log.id}>
+                          <div className={`audit-event-icon activity-icon-${color}`}>
+                            <Icon size={14} />
+                          </div>
+                          <div className="audit-event-content">
+                            <div className="audit-event-main">
+                              <span className="audit-event-actor">
+                                {getUserDisplayName({ email: log.actor_email })}
+                              </span>
+                              <span className="audit-event-action">
+                                {getAuditActionLabel(log.action)}
+                              </span>
+                              <span
+                                className={`badge ${log.source === 'cli_auth' ? 'badge-info' : 'badge-neutral'}`}
+                              >
+                                {log.source === 'cli_auth' ? 'CLI Auth' : 'Project'}
+                              </span>
+                              {log.environment_name && (
+                                <span
+                                  className={`badge badge-env badge-env-${log.environment_name}`}
+                                >
+                                  {log.environment_name}
+                                </span>
+                              )}
+                              <span
+                                className="audit-event-time"
+                                title={new Date(log.created_at).toLocaleString()}
+                              >
+                                {formatRelativeTime(log.created_at)}
+                              </span>
+                            </div>
+                            {details && (
+                              <div className="audit-event-meta">
+                                <span className="audit-event-details">{details}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
-            )}
-          </div>
+              {nextCursor && (
+                <div className="audit-load-more">
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
+                  >
+                    {isLoadingMore ? 'Loading…' : 'Load more'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
