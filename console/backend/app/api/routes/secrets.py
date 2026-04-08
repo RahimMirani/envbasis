@@ -9,9 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import ProjectAccess, get_current_user, get_project_access, require_secret_access
 from app.db.session import get_db
+from app.models.environment import Environment
 from app.models.secret import Secret
 from app.models.user import User
+from app.schemas.common import MessageResponse
 from app.schemas.secret import (
+    SecretBulkDeleteRequest,
     SecretCreateRequest,
     SecretDeleteResponse,
     EnvironmentSecretStatsRead,
@@ -66,6 +69,34 @@ def _validate_secret_value(*, key: str, value: str) -> None:
         ) from exc
 
 
+def _validate_secret_expiration(expires_at: datetime | None) -> datetime | None:
+    if expires_at is None:
+        return None
+
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+
+    if expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Secret expiration must be in the future.",
+        )
+
+    return expires_at
+
+
+def _serialize_secret_expiration(expires_at: datetime | None) -> datetime | None:
+    if expires_at is None:
+        return None
+
+    if expires_at.tzinfo is None:
+        return expires_at.replace(tzinfo=timezone.utc)
+
+    return expires_at.astimezone(timezone.utc)
+
+
 def _create_secret_version(
     *,
     db: Session,
@@ -74,6 +105,7 @@ def _create_secret_version(
     value: str,
     version: int,
     updated_by: uuid.UUID,
+    expires_at: datetime | None = None,
     is_deleted: bool = False,
 ) -> Secret:
     secret = Secret(
@@ -83,6 +115,7 @@ def _create_secret_version(
         version=version,
         is_deleted=is_deleted,
         updated_by=updated_by,
+        expires_at=expires_at,
     )
     db.add(secret)
     db.flush()
@@ -267,6 +300,7 @@ def list_secrets(
                 key=row.key,
                 version=row.version,
                 updated_at=row.updated_at,
+                expires_at=_serialize_secret_expiration(row.expires_at),
                 updated_by_user_id=row.updated_by,
                 updated_by_email=users_by_id.get(row.updated_by).email if row.updated_by in users_by_id else None,
             )
@@ -320,6 +354,7 @@ def reveal_secret(
         value=value,
         version=latest.version,
         updated_at=latest.updated_at,
+        expires_at=_serialize_secret_expiration(latest.expires_at),
         updated_by_user_id=latest.updated_by,
         updated_by_email=users_by_id.get(latest.updated_by).email if latest.updated_by in users_by_id else None,
         revealed_at=datetime.now(timezone.utc),
@@ -397,6 +432,7 @@ def create_secret(
     )
     key = _validate_secret_key(payload.key)
     _validate_secret_value(key=key, value=payload.value)
+    expires_at = _validate_secret_expiration(payload.expires_at)
 
     latest_by_key = _get_latest_secret_map(db, environment_id=environment.id)
     latest = latest_by_key.get(key)
@@ -414,6 +450,7 @@ def create_secret(
         value=payload.value,
         version=version,
         updated_by=current_user.id,
+        expires_at=expires_at,
     )
     write_audit_log(
         db,
@@ -421,18 +458,19 @@ def create_secret(
         environment_id=environment.id,
         user_id=current_user.id,
         action="secret.created",
-        metadata={"key": key, "version": secret.version},
+        metadata={"key": key, "version": secret.version, "expires_at": expires_at.isoformat() if expires_at else None},
     )
     webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secret.created")
     db.commit()
     db.refresh(secret)
-    dispatch_webhooks(webhook_targets, event="secret.created", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version})
+    dispatch_webhooks(webhook_targets, event="secret.created", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version, "expires_at": expires_at.isoformat() if expires_at else None})
     return SecretMutationResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
         key=key,
         version=secret.version,
         updated_at=secret.updated_at,
+        expires_at=_serialize_secret_expiration(secret.expires_at),
         changed=True,
     )
 
@@ -460,6 +498,7 @@ def update_secret(
     )
     key = _validate_secret_key(secret_key)
     _validate_secret_value(key=key, value=payload.value)
+    expires_at = _validate_secret_expiration(payload.expires_at)
 
     latest = _get_latest_secret_map(db, environment_id=environment.id).get(key)
     if latest is None or latest.is_deleted:
@@ -468,13 +507,14 @@ def update_secret(
             detail="Secret not found. Use the create endpoint instead.",
         )
 
-    if decrypt_secret_value(latest.encrypted_value) == payload.value:
+    if decrypt_secret_value(latest.encrypted_value) == payload.value and latest.expires_at == expires_at:
         return SecretMutationResponse(
             project_id=project_access.project.id,
             environment_id=environment.id,
             key=key,
             version=latest.version,
             updated_at=latest.updated_at,
+            expires_at=_serialize_secret_expiration(latest.expires_at),
             changed=False,
         )
 
@@ -485,6 +525,7 @@ def update_secret(
         value=payload.value,
         version=latest.version + 1,
         updated_by=current_user.id,
+        expires_at=expires_at,
     )
     write_audit_log(
         db,
@@ -492,18 +533,19 @@ def update_secret(
         environment_id=environment.id,
         user_id=current_user.id,
         action="secret.updated",
-        metadata={"key": key, "version": secret.version},
+        metadata={"key": key, "version": secret.version, "expires_at": expires_at.isoformat() if expires_at else None},
     )
     webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secret.updated")
     db.commit()
     db.refresh(secret)
-    dispatch_webhooks(webhook_targets, event="secret.updated", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version})
+    dispatch_webhooks(webhook_targets, event="secret.updated", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version, "expires_at": expires_at.isoformat() if expires_at else None})
     return SecretMutationResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
         key=key,
         version=secret.version,
         updated_at=secret.updated_at,
+        expires_at=_serialize_secret_expiration(secret.expires_at),
         changed=True,
     )
 
@@ -544,6 +586,7 @@ def delete_secret(
         value="",
         version=latest.version + 1,
         updated_by=current_user.id,
+        expires_at=latest.expires_at,
         is_deleted=True,
     )
     write_audit_log(
@@ -565,3 +608,105 @@ def delete_secret(
         version=secret.version,
         deleted_at=secret.updated_at,
     )
+
+
+@router.post(
+    "/{project_id}/secrets/bulk-delete",
+    response_model=MessageResponse,
+)
+def bulk_delete_secrets(
+    project_id: uuid.UUID,
+    payload: SecretBulkDeleteRequest,
+    project_access: ProjectAccess = Depends(require_secret_access),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    if project_id != project_access.project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    seen: set[tuple[uuid.UUID, str]] = set()
+    normalized_items: list[tuple[uuid.UUID, str]] = []
+    for item in payload.items:
+        normalized_key = _validate_secret_key(item.key)
+        item_key = (item.environment_id, normalized_key)
+        if item_key in seen:
+            continue
+        seen.add(item_key)
+        normalized_items.append(item_key)
+
+    environments_by_id: dict[uuid.UUID, Environment] = {}
+    latest_by_environment: dict[uuid.UUID, dict[str, Secret]] = {}
+    to_delete: list[tuple[Environment, Secret, str]] = []
+
+    for environment_id, key in normalized_items:
+        environment = environments_by_id.get(environment_id)
+        if environment is None:
+            environment = get_project_environment_or_404(
+                db,
+                project=project_access.project,
+                environment_id=environment_id,
+            )
+            environments_by_id[environment_id] = environment
+            latest_by_environment[environment_id] = _get_latest_secret_map(
+                db,
+                environment_id=environment_id,
+            )
+
+        latest = latest_by_environment[environment_id].get(key)
+        if latest is None or latest.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f'Secret "{key}" not found in environment "{environment.name}".',
+            )
+        to_delete.append((environment, latest, key))
+
+    deleted_keys: list[str] = []
+    webhook_payloads: list[tuple[uuid.UUID, dict[str, str | int | None]]] = []
+    for environment, latest, key in to_delete:
+        deleted = _create_secret_version(
+            db=db,
+            environment_id=environment.id,
+            key=key,
+            value="",
+            version=latest.version + 1,
+            updated_by=current_user.id,
+            expires_at=latest.expires_at,
+            is_deleted=True,
+        )
+        deleted_keys.append(f"{environment.name}:{key}")
+        metadata = {"key": key, "version": deleted.version}
+        write_audit_log(
+            db,
+            project_id=project_access.project.id,
+            environment_id=environment.id,
+            user_id=current_user.id,
+            action="secret.deleted",
+            metadata=metadata,
+        )
+        webhook_payloads.append((environment.id, metadata))
+
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="secrets.bulk_deleted",
+        metadata={"count": len(to_delete), "items": deleted_keys},
+    )
+    webhook_targets = get_webhooks_for_event(
+        db,
+        project_id=project_access.project.id,
+        action="secret.deleted",
+    )
+    db.commit()
+
+    for environment_id, metadata in webhook_payloads:
+        dispatch_webhooks(
+            webhook_targets,
+            event="secret.deleted",
+            project_id=project_access.project.id,
+            environment_id=environment_id,
+            actor_user_id=current_user.id,
+            metadata=metadata,
+        )
+
+    return MessageResponse(detail=f"Deleted {len(to_delete)} secret(s).")
