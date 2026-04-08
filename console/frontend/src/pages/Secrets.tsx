@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import CodeBlock from '../components/CodeBlock';
+import ConfirmDialog from '../components/ConfirmDialog';
 import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
@@ -24,6 +25,7 @@ import {
   listSecrets,
   pullSecrets,
   pushSecrets,
+  revealSecret,
   updateSecret,
   ApiError,
 } from '../lib/api';
@@ -76,7 +78,7 @@ export default function SecretsPage() {
   const [secretAccessState, setSecretAccessState] = useState<'enabled' | 'checking' | 'disabled'>(
     currentProject.role === 'owner' ? 'enabled' : 'checking'
   );
-  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
+  const [revealedValues, setRevealedValues] = useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showSecretModal, setShowSecretModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -97,6 +99,8 @@ export default function SecretsPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [activeSecretId, setActiveSecretId] = useState<string | null>(null);
+  const [secretPendingDelete, setSecretPendingDelete] = useState<SecretWithEnv | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const visibleEnvironments = useMemo(() => {
@@ -233,6 +237,8 @@ export default function SecretsPage() {
           });
 
         setSecrets(nextSecrets);
+        setRevealedValues({});
+        setCopiedId(null);
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -272,19 +278,65 @@ export default function SecretsPage() {
   const cliEnvironmentName =
     currentEnv === 'all' ? environments[0]?.name || 'dev' : currentEnv;
 
-  const toggleReveal = (id: string) => {
-    setRevealedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const revealSecretValue = async (secret: SecretWithEnv): Promise<string> => {
+    const secretId = buildSecretId(secret);
+    const cachedValue = revealedValues[secretId];
+    if (cachedValue !== undefined) {
+      return cachedValue;
+    }
+
+    setActiveSecretId(secretId);
+    setError(null);
+
+    try {
+      const response = await revealSecret(
+        currentProject.id,
+        secret.environment_id,
+        secret.key,
+        accessToken!
+      );
+      setRevealedValues((current) => ({ ...current, [secretId]: response.value }));
+      return response.value;
+    } catch (revealError) {
+      setError((revealError as Error).message || 'Failed to reveal secret.');
+      throw revealError;
+    } finally {
+      setActiveSecretId((current) => (current === secretId ? null : current));
+    }
   };
 
-  const handleCopy = (value: string, id: string) => {
-    navigator.clipboard.writeText(value);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const toggleReveal = async (secret: SecretWithEnv) => {
+    const secretId = buildSecretId(secret);
+    if (revealedValues[secretId] !== undefined) {
+      setRevealedValues((current) => {
+        const next = { ...current };
+        delete next[secretId];
+        return next;
+      });
+      if (copiedId === secretId) {
+        setCopiedId(null);
+      }
+      return;
+    }
+
+    try {
+      await revealSecretValue(secret);
+    } catch {
+      // The page-level error state is already updated by revealSecretValue.
+    }
+  };
+
+  const handleCopy = async (secret: SecretWithEnv) => {
+    const secretId = buildSecretId(secret);
+
+    try {
+      const value = revealedValues[secretId] ?? (await revealSecretValue(secret));
+      await navigator.clipboard.writeText(value);
+      setCopiedId(secretId);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      // The page-level error state is already updated by revealSecretValue.
+    }
   };
 
   const openCreateModal = () => {
@@ -313,13 +365,18 @@ export default function SecretsPage() {
     setShowExportModal(true);
   };
 
-  const openEditModal = (secret: SecretWithEnv) => {
-    setModalMode('edit');
-    setSecretKey(secret.key);
-    setSecretValue(secret.value);
-    setSecretEnvironmentId(secret.environment_id);
-    setMutationError(null);
-    setShowSecretModal(true);
+  const openEditModal = async (secret: SecretWithEnv) => {
+    try {
+      const value = await revealSecretValue(secret);
+      setModalMode('edit');
+      setSecretKey(secret.key);
+      setSecretValue(value);
+      setSecretEnvironmentId(secret.environment_id);
+      setMutationError(null);
+      setShowSecretModal(true);
+    } catch {
+      // The page-level error state is already updated by revealSecretValue.
+    }
   };
 
   const closeSecretModal = () => {
@@ -388,6 +445,8 @@ export default function SecretsPage() {
       });
 
     setSecrets(nextSecrets);
+    setRevealedValues({});
+    setCopiedId(null);
   };
 
   const handleSaveSecret = async () => {
@@ -434,19 +493,20 @@ export default function SecretsPage() {
   };
 
   const handleDeleteSecret = async (secret: SecretWithEnv) => {
-    if (!window.confirm(`Delete secret "${secret.key}" from ${secret.environment}?`)) {
-      return;
-    }
-
+    const secretId = buildSecretId(secret);
+    setActiveSecretId(secretId);
     setError(null);
 
     try {
       await deleteSecret(currentProject.id, secret.environment_id, secret.key, accessToken!);
-      setRevealedIds((current) => {
-        const next = new Set(current);
-        next.delete(buildSecretId(secret));
+      setRevealedValues((current) => {
+        const next = { ...current };
+        delete next[secretId];
         return next;
       });
+      if (copiedId === secretId) {
+        setCopiedId(null);
+      }
       await reloadSecrets();
       try {
         await refreshSecretStats();
@@ -455,6 +515,9 @@ export default function SecretsPage() {
       }
     } catch (deleteError) {
       setError((deleteError as Error).message || 'Failed to delete secret.');
+    } finally {
+      setActiveSecretId(null);
+      setSecretPendingDelete(null);
     }
   };
 
@@ -734,8 +797,10 @@ export default function SecretsPage() {
               <tbody>
                 {filteredSecrets.map((secret) => {
                   const secretId = buildSecretId(secret);
-                  const isRevealed = revealedIds.has(secretId);
+                  const revealedValue = revealedValues[secretId];
+                  const isRevealed = revealedValue !== undefined;
                   const isCopied = copiedId === secretId;
+                  const isBusy = activeSecretId === secretId;
                   return (
                     <tr key={secretId}>
                       <td>
@@ -745,7 +810,7 @@ export default function SecretsPage() {
                         <span
                           className={`secret-value mono ${isRevealed ? 'secret-value-revealed' : ''}`}
                         >
-                          {isRevealed ? secret.value : '••••••••••••'}
+                          {isRevealed ? revealedValue : '••••••••••••'}
                         </span>
                       </td>
                       <td>
@@ -762,17 +827,19 @@ export default function SecretsPage() {
                         <div className="secret-actions">
                           <button
                             className="btn btn-ghost btn-icon btn-sm"
-                            onClick={() => toggleReveal(secretId)}
-                            data-tooltip={isRevealed ? 'Hide' : 'Reveal'}
+                            onClick={() => void toggleReveal(secret)}
+                            data-tooltip={isBusy ? 'Working...' : isRevealed ? 'Hide' : 'Reveal'}
                             aria-label={isRevealed ? 'Hide secret' : 'Reveal secret'}
+                            disabled={isBusy}
                           >
                             {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
                           </button>
                           <button
                             className="btn btn-ghost btn-icon btn-sm"
-                            onClick={() => handleCopy(secret.value, secretId)}
+                            onClick={() => void handleCopy(secret)}
                             data-tooltip={isCopied ? 'Copied!' : 'Copy'}
                             aria-label="Copy secret value"
+                            disabled={isBusy}
                           >
                             {isCopied ? (
                               <Check size={14} className="text-success" />
@@ -782,17 +849,19 @@ export default function SecretsPage() {
                           </button>
                           <button
                             className="btn btn-ghost btn-icon btn-sm"
-                            onClick={() => openEditModal(secret)}
+                            onClick={() => void openEditModal(secret)}
                             data-tooltip="Edit"
                             aria-label="Edit secret"
+                            disabled={isBusy}
                           >
                             <Pencil size={14} />
                           </button>
                           <button
                             className="btn btn-ghost btn-icon btn-sm btn-danger-subtle"
-                            onClick={() => handleDeleteSecret(secret)}
+                            onClick={() => setSecretPendingDelete(secret)}
                             data-tooltip="Delete"
                             aria-label="Delete secret"
+                            disabled={isBusy}
                           >
                             <Trash2 size={14} />
                           </button>
@@ -1039,6 +1108,27 @@ export default function SecretsPage() {
           <span>Secret values are encrypted at rest and never exposed in logs.</span>
         </div>
       </Modal>
+      <ConfirmDialog
+        isOpen={Boolean(secretPendingDelete)}
+        title="Delete Secret"
+        description={
+          secretPendingDelete
+            ? `Delete secret "${secretPendingDelete.key}" from ${secretPendingDelete.environment}?`
+            : 'Delete this secret?'
+        }
+        confirmLabel="Delete Secret"
+        onConfirm={() => {
+          if (secretPendingDelete) {
+            void handleDeleteSecret(secretPendingDelete);
+          }
+        }}
+        onClose={() => {
+          if (!activeSecretId) {
+            setSecretPendingDelete(null);
+          }
+        }}
+        isBusy={Boolean(secretPendingDelete && activeSecretId === buildSecretId(secretPendingDelete))}
+      />
     </div>
   );
 }
