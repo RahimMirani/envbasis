@@ -169,19 +169,58 @@ export default function ProjectLayout() {
     );
     setCurrentProject((current) =>
       current
-        ? {
-            ...current,
-            environment_count: (current.environment_count || 0) + 1,
-          }
+        ? { ...current, environment_count: (current.environment_count || 0) + 1 }
         : current
     );
     setProjects((current) =>
       current.map((project) =>
         project.id === environment.project_id
-          ? {
-              ...project,
-              environment_count: (project.environment_count || 0) + 1,
-            }
+          ? { ...project, environment_count: (project.environment_count || 0) + 1 }
+          : project
+      )
+    );
+  };
+
+  const handleEnvironmentUpdated = (updated: Environment) => {
+    setEnvironments((current) =>
+      current.map((env) => (env.id === updated.id ? updated : env))
+    );
+    setSecretStats((current) =>
+      current
+        ? {
+            ...current,
+            environments: current.environments.map((item) =>
+              item.environment_id === updated.id
+                ? { ...item, environment_name: updated.name }
+                : item
+            ),
+          }
+        : current
+    );
+  };
+
+  const handleEnvironmentDeleted = (envId: string) => {
+    setEnvironments((current) => current.filter((env) => env.id !== envId));
+    setSecretStats((current) =>
+      current
+        ? {
+            ...current,
+            environments: current.environments.filter((item) => item.environment_id !== envId),
+            total_secret_count: current.environments
+              .filter((item) => item.environment_id !== envId)
+              .reduce((sum, item) => sum + item.secret_count, 0),
+          }
+        : current
+    );
+    setCurrentProject((current) =>
+      current
+        ? { ...current, environment_count: Math.max(0, (current.environment_count || 0) - 1) }
+        : current
+    );
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === projectId
+          ? { ...project, environment_count: Math.max(0, (project.environment_count || 0) - 1) }
           : project
       )
     );
@@ -288,6 +327,8 @@ export default function ProjectLayout() {
               isSecretStatsLoading,
               refreshSecretStats,
               onEnvironmentCreated: handleEnvironmentCreated,
+              onEnvironmentUpdated: handleEnvironmentUpdated,
+              onEnvironmentDeleted: handleEnvironmentDeleted,
               onProjectUpdated: handleProjectUpdated,
               onMemberCountChanged: handleMemberCountChanged,
               onRuntimeTokenCountChanged: handleRuntimeTokenCountChanged,
