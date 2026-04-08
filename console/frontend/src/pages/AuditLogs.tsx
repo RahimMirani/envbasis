@@ -14,7 +14,7 @@ import {
 import { useOutletContext } from 'react-router-dom';
 import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
-import { listUnifiedAuditLogs } from '../lib/api';
+import { listUnifiedAuditLogs, downloadAuditLogs } from '../lib/api';
 import {
   getAuditActionLabel,
   getAuditColor,
@@ -41,6 +41,11 @@ const auditIcons: Record<string, LucideIcon> = {
   activity: Activity,
 };
 
+interface FilterOption {
+  value: string;
+  label: string;
+}
+
 export default function AuditLogsPage() {
   const { currentProject, currentEnv } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
@@ -52,6 +57,7 @@ export default function AuditLogsPage() {
   const [filterEnv, setFilterEnv] = useState(currentEnv === 'all' ? 'all' : currentEnv);
   const [filterSource, setFilterSource] = useState<'all' | 'project' | 'cli_auth'>('all');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     setFilterEnv(currentEnv === 'all' ? 'all' : currentEnv);
@@ -127,12 +133,46 @@ export default function AuditLogsPage() {
   );
 
   const uniqueActions = useMemo(() => [...new Set(logs.map((log) => log.action))], [logs]);
+  const actionOptions = useMemo<FilterOption[]>(
+    () => [
+      { value: 'all', label: 'All actions' },
+      ...uniqueActions.map((action) => ({
+        value: action,
+        label: getAuditActionLabel(action),
+      })),
+    ],
+    [uniqueActions]
+  );
+  const environmentOptions = useMemo<FilterOption[]>(
+    () => [
+      { value: 'all', label: 'All environments' },
+      ...[...new Set(logs.map((log) => log.environment_name).filter(Boolean))].map(
+        (environmentName) => ({
+          value: environmentName!,
+          label: environmentName!,
+        })
+      ),
+    ],
+    [logs]
+  );
 
   const sourceOptions = [
     { value: 'all', label: 'All sources' },
     { value: 'project', label: 'Project' },
     { value: 'cli_auth', label: 'CLI auth' },
   ] as const;
+
+  const handleExport = async (format: 'csv' | 'json') => {
+    if (!accessToken || isExporting) return;
+    setIsExporting(true);
+    try {
+      await downloadAuditLogs(currentProject.id, accessToken, format);
+    } catch (exportError) {
+      setError((exportError as Error).message || 'Export failed.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleLoadMore = async () => {
     if (!accessToken || !nextCursor || isLoadingMore) {
@@ -167,6 +207,26 @@ export default function AuditLogsPage() {
             A combined feed of this project&apos;s activity and your CLI authentication events.
           </p>
         </div>
+        <div className="page-header-actions">
+          <button
+            className="btn btn-secondary"
+            onClick={() => { void handleExport('csv'); }}
+            disabled={isExporting || logs.length === 0}
+            title="Export as CSV"
+          >
+            <ArrowDownToLine size={14} />
+            {isExporting ? 'Exporting...' : 'CSV'}
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => { void handleExport('json'); }}
+            disabled={isExporting || logs.length === 0}
+            title="Export as JSON"
+          >
+            <ArrowDownToLine size={14} />
+            JSON
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -192,52 +252,69 @@ export default function AuditLogsPage() {
       ) : (
         <>
           <div className="audit-filters">
-            <select
-              className="input select audit-filter-select"
-              value={filterSource}
-              onChange={(event) =>
-                setFilterSource(event.target.value as 'all' | 'project' | 'cli_auth')
-              }
-              id="audit-filter-source"
-            >
-              {sourceOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <div className="audit-filter-group">
-              <Filter size={14} className="audit-filter-icon" />
-              <select
-                className="input select audit-filter-select"
-                value={filterAction}
-                onChange={(event) => setFilterAction(event.target.value)}
-                id="audit-filter-action"
-              >
-                <option value="all">All actions</option>
-                {uniqueActions.map((action) => (
-                  <option key={action} value={action}>
-                    {getAuditActionLabel(action)}
-                  </option>
-                ))}
-              </select>
+            <div className="audit-filter-heading">
+              <Filter size={13} />
+              <span>Filters</span>
             </div>
-            <select
-              className="input select audit-filter-select"
-              value={filterEnv}
-              onChange={(event) => setFilterEnv(event.target.value)}
-              id="audit-filter-env"
-              disabled={filterSource === 'cli_auth'}
-            >
-              <option value="all">All environments</option>
-              {[...new Set(logs.map((log) => log.environment_name).filter(Boolean))].map(
-                (environmentName) => (
-                  <option key={environmentName} value={environmentName!}>
-                    {environmentName}
-                  </option>
-                )
-              )}
-            </select>
+
+            <div className="audit-filter-groups">
+              <label className="audit-filter-control" htmlFor="audit-filter-source">
+                <span className="audit-filter-label">Source</span>
+                <select
+                  className="input select audit-filter-select"
+                  value={filterSource}
+                  onChange={(event) =>
+                    setFilterSource(event.target.value as 'all' | 'project' | 'cli_auth')
+                  }
+                  id="audit-filter-source"
+                >
+                  {sourceOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="audit-filter-control" htmlFor="audit-filter-action">
+                <span className="audit-filter-label">Action</span>
+                <select
+                  className="input select audit-filter-select"
+                  value={filterAction}
+                  onChange={(event) => setFilterAction(event.target.value)}
+                  id="audit-filter-action"
+                >
+                  {actionOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="audit-filter-control" htmlFor="audit-filter-env">
+                <div className="audit-filter-label-row">
+                  <span className="audit-filter-label">Environment</span>
+                  {filterSource === 'cli_auth' && (
+                    <span className="audit-filter-hint">Project-only</span>
+                  )}
+                </div>
+                <select
+                  className="input select audit-filter-select"
+                  value={filterEnv}
+                  onChange={(event) => setFilterEnv(event.target.value)}
+                  id="audit-filter-env"
+                  disabled={filterSource === 'cli_auth'}
+                >
+                  {environmentOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
             <span className="audit-count">
               {filteredLogs.length} event{filteredLogs.length !== 1 ? 's' : ''}
             </span>
