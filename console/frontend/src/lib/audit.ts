@@ -4,6 +4,7 @@ const actionLabels: Record<string, string> = {
   secret_created: 'created a secret',
   secret_updated: 'updated a secret',
   secret_deleted: 'deleted a secret',
+  'secret.revealed': 'revealed a secret',
   secrets_pushed: 'pushed secrets',
   secrets_pulled: 'pulled secrets',
   environment_created: 'created an environment',
@@ -35,6 +36,7 @@ const actionColors: Record<string, string> = {
   secret_created: 'accent',
   secret_updated: 'accent',
   secret_deleted: 'danger',
+  'secret.revealed': 'warning',
   secrets_pushed: 'accent',
   secrets_pulled: 'info',
   environment_created: 'success',
@@ -66,6 +68,7 @@ const actionIcons: Record<string, string> = {
   secret_created: 'key',
   secret_updated: 'key',
   secret_deleted: 'key',
+  'secret.revealed': 'key',
   secrets_pushed: 'key',
   secrets_pulled: 'pull',
   environment_created: 'environment',
@@ -115,6 +118,10 @@ export function getAuditDetails(log: AuditLog): string | null {
     return `Key: ${metadata.secret_key}`;
   }
 
+  if (typeof metadata.key === 'string') {
+    return `Key: ${metadata.key}`;
+  }
+
   if (typeof metadata.token_name === 'string') {
     return `Token: ${metadata.token_name}`;
   }
@@ -125,6 +132,10 @@ export function getAuditDetails(log: AuditLog): string | null {
 
   if (typeof metadata.environment_name === 'string') {
     return `Environment: ${metadata.environment_name}`;
+  }
+
+  if (typeof metadata.changed_count === 'number' && typeof metadata.unchanged_count === 'number') {
+    return `${metadata.changed_count} changed, ${metadata.unchanged_count} unchanged`;
   }
 
   if (typeof metadata.changed === 'number' && typeof metadata.unchanged === 'number') {
