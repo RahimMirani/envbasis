@@ -19,6 +19,7 @@ import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
+  bulkDeleteSecrets,
   createSecret,
   deleteSecret,
   listMembers,
@@ -30,7 +31,7 @@ import {
   ApiError,
 } from '../lib/api';
 import { parseDotenv, serializeDotenv } from '../lib/dotenv';
-import { formatRelativeTime } from '../lib/format';
+import { formatDate, formatRelativeTime } from '../lib/format';
 import { getDefaultEnvironmentId } from '../lib/secrets';
 import type { Project, Environment, Secret } from '../types/api';
 
@@ -67,6 +68,50 @@ function getEnvironmentBadgeClass(environmentName: string): string {
   return `badge badge-env badge-env-${String(environmentName || '').toLowerCase()}`;
 }
 
+function toLocalDateTimeInput(dateString: string | null | undefined): string {
+  if (!dateString) {
+    return '';
+  }
+
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function toIsoFromLocalDateTimeInput(value: string): string | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
+function formatSecretExpiry(expiresAt: string | null): string {
+  if (!expiresAt) {
+    return 'Never';
+  }
+
+  const expiry = new Date(expiresAt);
+  if (Number.isNaN(expiry.getTime())) {
+    return 'Never';
+  }
+
+  if (expiry.getTime() <= Date.now()) {
+    return `Expired ${formatDate(expiresAt)}`;
+  }
+
+  return formatDate(expiresAt);
+}
+
 export default function SecretsPage() {
   const { currentEnv, currentProject, environments, refreshSecretStats } =
     useOutletContext<OutletContextType>();
@@ -86,6 +131,7 @@ export default function SecretsPage() {
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create');
   const [secretKey, setSecretKey] = useState('');
   const [secretValue, setSecretValue] = useState('');
+  const [secretExpiresAt, setSecretExpiresAt] = useState('');
   const [secretEnvironmentId, setSecretEnvironmentId] = useState('');
   const [uploadEnvironmentId, setUploadEnvironmentId] = useState('');
   const [uploadContent, setUploadContent] = useState('');
@@ -101,6 +147,9 @@ export default function SecretsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [activeSecretId, setActiveSecretId] = useState<string | null>(null);
   const [secretPendingDelete, setSecretPendingDelete] = useState<SecretWithEnv | null>(null);
+  const [selectedSecretIds, setSelectedSecretIds] = useState<string[]>([]);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const visibleEnvironments = useMemo(() => {
@@ -270,12 +319,26 @@ export default function SecretsPage() {
   }, [accessToken, apiConfigError, currentProject.id, secretAccessState, visibleEnvironments, search]);
 
   const filteredSecrets = secrets;
+  const filteredSecretIds = useMemo(
+    () => filteredSecrets.map((secret) => buildSecretId(secret)),
+    [filteredSecrets]
+  );
+  const selectedSecrets = useMemo(
+    () => filteredSecrets.filter((secret) => selectedSecretIds.includes(buildSecretId(secret))),
+    [filteredSecrets, selectedSecretIds]
+  );
+  const allVisibleSelected =
+    filteredSecretIds.length > 0 && filteredSecretIds.every((secretId) => selectedSecretIds.includes(secretId));
 
   const defaultEnvironmentId = getDefaultEnvironmentId(currentEnv, environments);
   const canUseSecrets = secretAccessState === 'enabled';
   const isSecretAccessDenied = secretAccessState === 'disabled';
   const cliEnvironmentName =
     currentEnv === 'all' ? environments[0]?.name || 'dev' : currentEnv;
+
+  useEffect(() => {
+    setSelectedSecretIds((current) => current.filter((secretId) => filteredSecretIds.includes(secretId)));
+  }, [filteredSecretIds]);
 
   const revealSecretValue = async (secret: SecretWithEnv): Promise<string> => {
     const secretId = buildSecretId(secret);
@@ -342,6 +405,7 @@ export default function SecretsPage() {
     setModalMode('create');
     setSecretKey('');
     setSecretValue('');
+    setSecretExpiresAt('');
     setSecretEnvironmentId(defaultEnvironmentId);
     setMutationError(null);
     setShowSecretModal(true);
@@ -370,6 +434,7 @@ export default function SecretsPage() {
       setModalMode('edit');
       setSecretKey(secret.key);
       setSecretValue(value);
+      setSecretExpiresAt(toLocalDateTimeInput(secret.expires_at));
       setSecretEnvironmentId(secret.environment_id);
       setMutationError(null);
       setShowSecretModal(true);
@@ -419,7 +484,9 @@ export default function SecretsPage() {
 
     const responses = await Promise.all(
       visibleEnvironments.map((environment) =>
-        listSecrets(currentProject.id, environment.id, accessToken).then((response) => ({
+        listSecrets(currentProject.id, environment.id, accessToken, {
+          key: search || undefined,
+        }).then((response) => ({
           environment,
           response,
         }))
@@ -448,6 +515,24 @@ export default function SecretsPage() {
     setCopiedId(null);
   };
 
+  const toggleSecretSelection = (secretId: string) => {
+    setSelectedSecretIds((current) =>
+      current.includes(secretId)
+        ? current.filter((id) => id !== secretId)
+        : [...current, secretId]
+    );
+  };
+
+  const toggleSelectAllVisibleSecrets = () => {
+    setSelectedSecretIds((current) => {
+      if (allVisibleSelected) {
+        return current.filter((secretId) => !filteredSecretIds.includes(secretId));
+      }
+
+      return [...new Set([...current, ...filteredSecretIds])];
+    });
+  };
+
   const handleSaveSecret = async () => {
     const trimmedKey = secretKey.trim().toUpperCase();
 
@@ -469,10 +554,12 @@ export default function SecretsPage() {
         await createSecret(currentProject.id, secretEnvironmentId, accessToken!, {
           key: trimmedKey,
           value: secretValue,
+          expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
         });
       } else {
         await updateSecret(currentProject.id, secretEnvironmentId, trimmedKey, accessToken!, {
           value: secretValue,
+          expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
         });
       }
 
@@ -517,6 +604,37 @@ export default function SecretsPage() {
     } finally {
       setActiveSecretId(null);
       setSecretPendingDelete(null);
+    }
+  };
+
+  const handleBulkDeleteSecrets = async () => {
+    if (selectedSecrets.length === 0) {
+      setShowBulkDeleteConfirm(false);
+      return;
+    }
+
+    setIsBulkDeleting(true);
+    setError(null);
+
+    try {
+      await bulkDeleteSecrets(currentProject.id, accessToken!, {
+        items: selectedSecrets.map((secret) => ({
+          environment_id: secret.environment_id,
+          key: secret.key,
+        })),
+      });
+      setSelectedSecretIds([]);
+      setShowBulkDeleteConfirm(false);
+      await reloadSecrets();
+      try {
+        await refreshSecretStats();
+      } catch {
+        // Keep the secret table fresh even if the metadata refresh fails.
+      }
+    } catch (bulkDeleteError) {
+      setError((bulkDeleteError as Error).message || 'Failed to delete selected secrets.');
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -657,6 +775,14 @@ export default function SecretsPage() {
         </div>
         <div className="page-header-actions">
           <button
+            className="btn btn-danger"
+            onClick={() => setShowBulkDeleteConfirm(true)}
+            disabled={!canUseSecrets || selectedSecrets.length === 0 || isBulkDeleting}
+          >
+            <Trash2 size={14} />
+            Delete Selected
+          </button>
+          <button
             className="btn btn-secondary"
             id="bulk-download-btn"
             onClick={openExportModal}
@@ -739,9 +865,16 @@ export default function SecretsPage() {
             id="secrets-search"
           />
         </div>
-        <span className="secrets-count">
-          {filteredSecrets.length} secret{filteredSecrets.length !== 1 ? 's' : ''}
-        </span>
+        <div className="secrets-toolbar-meta">
+          {selectedSecrets.length > 0 && (
+            <span className="secrets-selected-count">
+              {selectedSecrets.length} selected
+            </span>
+          )}
+          <span className="secrets-count">
+            {filteredSecrets.length} secret{filteredSecrets.length !== 1 ? 's' : ''}
+          </span>
+        </div>
       </div>
 
       {isSecretAccessDenied ? (
@@ -784,10 +917,20 @@ export default function SecretsPage() {
             <table id="secrets-table">
               <thead>
                 <tr>
+                  <th style={{ width: 40 }}>
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAllVisibleSecrets}
+                      aria-label="Select all visible secrets"
+                      disabled={!canUseSecrets || isBulkDeleting}
+                    />
+                  </th>
                   <th>Key</th>
                   <th>Value</th>
                   <th>Environment</th>
                   <th>Version</th>
+                  <th>Expires</th>
                   <th>Updated</th>
                   <th>By</th>
                   <th style={{ width: 140 }}>Actions</th>
@@ -802,6 +945,15 @@ export default function SecretsPage() {
                   const isBusy = activeSecretId === secretId;
                   return (
                     <tr key={secretId}>
+                      <td className="table-checkbox-cell">
+                        <input
+                          type="checkbox"
+                          checked={selectedSecretIds.includes(secretId)}
+                          onChange={() => toggleSecretSelection(secretId)}
+                          aria-label={`Select secret ${secret.key}`}
+                          disabled={!canUseSecrets || isBulkDeleting}
+                        />
+                      </td>
                       <td>
                         <code className="secret-key">{secret.key}</code>
                       </td>
@@ -818,6 +970,7 @@ export default function SecretsPage() {
                         </span>
                       </td>
                       <td className="text-mono text-sm">v{secret.version}</td>
+                      <td className="text-secondary">{formatSecretExpiry(secret.expires_at)}</td>
                       <td className="text-secondary">{formatRelativeTime(secret.updated_at)}</td>
                       <td className="text-secondary">
                         {secret.updated_by_email || 'Unknown user'}
@@ -1097,6 +1250,18 @@ export default function SecretsPage() {
             ))}
           </select>
         </div>
+        <div className="form-group">
+          <label htmlFor="secret-expiry-input">Expiration Date</label>
+          <input
+            id="secret-expiry-input"
+            className="input"
+            type="datetime-local"
+            value={secretExpiresAt}
+            onChange={(event) => setSecretExpiresAt(event.target.value)}
+            disabled={isSubmitting}
+          />
+          <p className="secrets-upload-hint">Leave blank for no expiration.</p>
+        </div>
         {mutationError && (
           <p className="secrets-form-error" role="alert">
             {mutationError}
@@ -1127,6 +1292,25 @@ export default function SecretsPage() {
           }
         }}
         isBusy={Boolean(secretPendingDelete && activeSecretId === buildSecretId(secretPendingDelete))}
+      />
+      <ConfirmDialog
+        isOpen={showBulkDeleteConfirm}
+        title="Delete Selected Secrets"
+        description={
+          selectedSecrets.length > 0
+            ? `Delete ${selectedSecrets.length} selected secret${selectedSecrets.length !== 1 ? 's' : ''}?`
+            : 'Delete selected secrets?'
+        }
+        confirmLabel="Delete Selected"
+        onConfirm={() => {
+          void handleBulkDeleteSecrets();
+        }}
+        onClose={() => {
+          if (!isBulkDeleting) {
+            setShowBulkDeleteConfirm(false);
+          }
+        }}
+        isBusy={isBulkDeleting}
       />
     </div>
   );
