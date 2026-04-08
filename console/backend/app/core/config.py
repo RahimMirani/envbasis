@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     cli_auth_jwt_issuer: str = "envbasis-cli"
     cli_auth_jwt_audience: str = "envbasis-cli"
     invite_app_base_url: str = "http://localhost:5173"
+    invite_logo_url: str | None = None
     invite_from_email: str | None = None
     invite_smtp_host: str | None = None
     invite_smtp_port: int = 587
