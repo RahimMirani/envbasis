@@ -3,6 +3,7 @@ import type {
   Project,
   Environment,
   Secret,
+  RevealedSecret,
   SecretListResponse,
   PushSecretsResponse,
   PullSecretsResponse,
@@ -233,6 +234,22 @@ export function listSecrets(
 ): Promise<SecretListResponse> {
   return apiRequest<SecretListResponse>(
     `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets`,
+    {
+      ...options,
+      accessToken,
+    }
+  );
+}
+
+export function revealSecret(
+  projectId: string,
+  environmentId: string,
+  secretKey: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<RevealedSecret> {
+  return apiRequest<RevealedSecret>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}/reveal`,
     {
       ...options,
       accessToken,
@@ -555,6 +572,9 @@ export function revokeRuntimeToken(
 
 interface AuditLogsOptions extends RequestOptions {
   limit?: number;
+  cursor?: string;
+  projectId?: string;
+  source?: 'all' | 'project' | 'cli_auth';
 }
 
 export function listAuditLogs(
@@ -574,9 +594,18 @@ export function listAuditLogs(
 
 export function listUnifiedAuditLogs(
   accessToken: string,
-  { limit = 100, ...options }: AuditLogsOptions = {}
+  { limit = 100, cursor, projectId, source, ...options }: AuditLogsOptions = {}
 ): Promise<UnifiedAuditLogListResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  if (source && source !== 'all') {
+    params.set('source', source);
+  }
   return apiRequest<UnifiedAuditLogListResponse>(`/audit-logs/unified?${params.toString()}`, {
     ...options,
     accessToken,
