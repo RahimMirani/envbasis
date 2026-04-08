@@ -11,6 +11,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import ConfirmDialog from '../components/ConfirmDialog';
 import DashboardLoader from '../components/DashboardLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
@@ -142,6 +143,7 @@ export default function TokensPage() {
   const [tokenValueModal, setTokenValueModal] = useState<TokenValueModal | null>(null);
   const [copiedToken, setCopiedToken] = useState(false);
   const [activeTokenId, setActiveTokenId] = useState<string | null>(null);
+  const [tokenPendingRevoke, setTokenPendingRevoke] = useState<RuntimeToken | null>(null);
 
   const environmentById = useMemo(
     () => Object.fromEntries(environments.map((environment) => [environment.id, environment])),
@@ -299,10 +301,6 @@ export default function TokensPage() {
   };
 
   const handleRevokeToken = async (token: RuntimeToken) => {
-    if (!window.confirm(`Revoke runtime token "${token.name}"?`)) {
-      return;
-    }
-
     setActiveTokenId(token.id);
     setError(null);
 
@@ -324,6 +322,7 @@ export default function TokensPage() {
       setError((revokeErrorValue as Error).message || 'Failed to revoke runtime token.');
     } finally {
       setActiveTokenId(null);
+      setTokenPendingRevoke(null);
     }
   };
 
@@ -579,7 +578,7 @@ export default function TokensPage() {
                             <button
                               className="btn btn-danger btn-sm"
                               id={`revoke-${token.id}`}
-                              onClick={() => handleRevokeToken(token)}
+                              onClick={() => setTokenPendingRevoke(token)}
                               disabled={isBusy}
                             >
                               Revoke
@@ -773,6 +772,27 @@ export default function TokensPage() {
           </button>
         </div>
       </Modal>
+      <ConfirmDialog
+        isOpen={Boolean(tokenPendingRevoke)}
+        title="Revoke Runtime Token"
+        description={
+          tokenPendingRevoke
+            ? `Revoke runtime token "${tokenPendingRevoke.name}"?`
+            : 'Revoke this runtime token?'
+        }
+        confirmLabel="Revoke Token"
+        onConfirm={() => {
+          if (tokenPendingRevoke) {
+            void handleRevokeToken(tokenPendingRevoke);
+          }
+        }}
+        onClose={() => {
+          if (!activeTokenId) {
+            setTokenPendingRevoke(null);
+          }
+        }}
+        isBusy={Boolean(activeTokenId)}
+      />
     </div>
   );
 }
