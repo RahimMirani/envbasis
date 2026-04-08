@@ -11,6 +11,7 @@ from app.models import (
     RuntimeTokenShare,
     Secret,
     User,
+    Webhook,
 )
 from app.models.base import Base
 
@@ -28,4 +29,5 @@ __all__ = [
     "RuntimeTokenShare",
     "Secret",
     "User",
+    "Webhook",
 ]
