@@ -582,20 +582,6 @@ def revoke_member(
                 ],
             },
         )
-    if payload.shared_token_action == "keep_active" and revealed_shared_tokens:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "revealed_runtime_tokens_require_revocation",
-                "message": "This member already revealed one or more shared runtime tokens. Keeping them active is unsafe. Revoke or rotate those tokens instead.",
-                "revealed_shared_token_count": len(revealed_shared_tokens),
-                "revealed_shared_tokens": [
-                    {"id": str(token.id), "name": token.name}
-                    for token in revealed_shared_tokens
-                ],
-            },
-        )
-
     token_ids = [token.id for token in shared_tokens]
     share_rows = []
     if token_ids:
