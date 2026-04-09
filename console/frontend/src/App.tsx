@@ -1,11 +1,14 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import RequireAuth from './components/RequireAuth';
+import GlobalLayout from './layouts/GlobalLayout';
 import ProjectLayout from './layouts/ProjectLayout';
 import LoginPage from './pages/Login';
 import SignupPage from './pages/Signup';
 import AuthCallbackPage from './pages/AuthCallback';
 import CliAuthPage from './pages/CliAuth';
 import ProjectsPage from './pages/Projects';
+import GlobalAuditLogsPage from './pages/GlobalAuditLogs';
+import AccountSettingsPage from './pages/AccountSettings';
 import OverviewPage from './pages/Overview';
 import SecretsPage from './pages/Secrets';
 import EnvironmentsPage from './pages/Environments';
@@ -31,13 +34,16 @@ export default function App() {
           }
         />
         <Route
-          path="/"
           element={
             <RequireAuth>
-              <ProjectsPage />
+              <GlobalLayout />
             </RequireAuth>
           }
-        />
+        >
+          <Route path="/" element={<ProjectsPage />} />
+          <Route path="/audit" element={<GlobalAuditLogsPage />} />
+          <Route path="/account" element={<AccountSettingsPage />} />
+        </Route>
         <Route
           path="/projects/:projectId"
           element={
