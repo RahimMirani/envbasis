@@ -14,7 +14,7 @@ import {
 import { useOutletContext } from 'react-router-dom';
 import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
-import { listUnifiedAuditLogs, downloadAuditLogs } from '../lib/api';
+import { listAuditLogs, downloadAuditLogs } from '../lib/api';
 import {
   getAuditActionLabel,
   getAuditColor,
@@ -89,12 +89,9 @@ export default function AuditLogsPage() {
   const { accessToken, apiConfigError } = useAuth();
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterAction, setFilterAction] = useState('all');
   const [filterEnv, setFilterEnv] = useState(currentEnv === 'all' ? 'all' : currentEnv);
-  const [filterSource, setFilterSource] = useState<'all' | 'project' | 'cli_auth'>('all');
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
@@ -102,9 +99,7 @@ export default function AuditLogsPage() {
   }, [currentEnv]);
 
   useEffect(() => {
-    if (!accessToken) {
-      return undefined;
-    }
+    if (!accessToken) return undefined;
 
     if (apiConfigError) {
       setError(apiConfigError);
@@ -118,56 +113,35 @@ export default function AuditLogsPage() {
     async function loadAuditLogs() {
       setIsLoading(true);
       setError(null);
-
       try {
-        const response = await listUnifiedAuditLogs(accessToken!, {
-          limit: 50,
-          projectId: currentProject.id,
-          source: filterSource,
+        const response = await listAuditLogs(currentProject.id, accessToken!, {
+          limit: 500,
           signal: controller.signal,
         });
-
-        if (!isActive) {
-          return;
-        }
-
-        setLogs(response.logs);
-        setNextCursor(response.next_cursor);
+        if (!isActive) return;
+        setLogs(response);
       } catch (loadError) {
-        if (!isActive || controller.signal.aborted) {
-          return;
-        }
-
+        if (!isActive || controller.signal.aborted) return;
         setError((loadError as Error).message || 'Failed to load audit logs.');
         setLogs([]);
-        setNextCursor(null);
       } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
+        if (isActive) setIsLoading(false);
       }
     }
 
     void loadAuditLogs();
-
-    return () => {
-      isActive = false;
-      controller.abort();
-    };
-  }, [accessToken, apiConfigError, currentProject.id, filterSource]);
+    return () => { isActive = false; controller.abort(); };
+  }, [accessToken, apiConfigError, currentProject.id]);
 
   const filteredLogs = useMemo(
     () =>
       logs.filter((log) => {
         const matchAction = filterAction === 'all' || log.action === filterAction;
-        const environmentName = log.environment_name || '—';
         const matchEnv =
-          filterEnv === 'all' ||
-          (filterSource === 'cli_auth' ? true : environmentName === filterEnv) ||
-          (log.source === 'cli_auth' && filterEnv === 'all');
+          filterEnv === 'all' || (log.environment_name ?? '—') === filterEnv;
         return matchAction && matchEnv;
       }),
-    [filterAction, filterEnv, filterSource, logs]
+    [filterAction, filterEnv, logs]
   );
 
   const dateGroups = useMemo(() => groupLogsByDate(filteredLogs), [filteredLogs]);
@@ -187,20 +161,11 @@ export default function AuditLogsPage() {
     () => [
       { value: 'all', label: 'All environments' },
       ...[...new Set(logs.map((log) => log.environment_name).filter(Boolean))].map(
-        (environmentName) => ({
-          value: environmentName!,
-          label: environmentName!,
-        })
+        (environmentName) => ({ value: environmentName!, label: environmentName! })
       ),
     ],
     [logs]
   );
-
-  const sourceOptions = [
-    { value: 'all', label: 'All' },
-    { value: 'project', label: 'Project' },
-    { value: 'cli_auth', label: 'CLI Auth' },
-  ] as const;
 
   const hasActiveFilters = filterAction !== 'all' || filterEnv !== 'all';
 
@@ -221,37 +186,13 @@ export default function AuditLogsPage() {
     }
   };
 
-  const handleLoadMore = async () => {
-    if (!accessToken || !nextCursor || isLoadingMore) {
-      return;
-    }
-
-    setIsLoadingMore(true);
-    setError(null);
-
-    try {
-      const response = await listUnifiedAuditLogs(accessToken, {
-        limit: 50,
-        cursor: nextCursor,
-        projectId: currentProject.id,
-        source: filterSource,
-      });
-      setLogs((currentLogs) => [...currentLogs, ...response.logs]);
-      setNextCursor(response.next_cursor);
-    } catch (loadError) {
-      setError((loadError as Error).message || 'Failed to load more audit logs.');
-    } finally {
-      setIsLoadingMore(false);
-    }
-  };
-
   return (
     <div className="audit-page animate-in">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Audit Logs</h1>
           <p className="page-subtitle">
-            A combined feed of this project&apos;s activity and your CLI authentication events.
+            A record of all actions taken in this project.
           </p>
         </div>
         <div className="page-header-actions">
@@ -286,39 +227,20 @@ export default function AuditLogsPage() {
         <DashboardLoader
           compact
           title="Loading audit logs"
-          description="Fetching the combined project and CLI activity trail."
+          description="Fetching project activity."
         />
       ) : logs.length === 0 ? (
         <div className="empty-state">
           <h3>No audit events yet</h3>
-          <p>
-            Audit entries will appear as project actions happen and CLI logins are approved or
-            denied.
-          </p>
+          <p>Audit entries will appear as actions are taken in this project.</p>
         </div>
       ) : (
         <>
           <div className="audit-filter-bar">
-            <div className="audit-source-pills">
-              {sourceOptions.map((option) => (
-                <button
-                  key={option.value}
-                  className={`audit-source-pill${filterSource === option.value ? ' audit-source-pill-active' : ''}`}
-                  onClick={() =>
-                    setFilterSource(option.value as 'all' | 'project' | 'cli_auth')
-                  }
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="audit-filter-divider" />
-
             <select
               className="input select audit-filter-select-compact"
               value={filterAction}
-              onChange={(event) => setFilterAction(event.target.value)}
+              onChange={(e) => setFilterAction(e.target.value)}
               aria-label="Filter by action"
             >
               {actionOptions.map((option) => (
@@ -331,8 +253,7 @@ export default function AuditLogsPage() {
             <select
               className="input select audit-filter-select-compact"
               value={filterEnv}
-              onChange={(event) => setFilterEnv(event.target.value)}
-              disabled={filterSource === 'cli_auth'}
+              onChange={(e) => setFilterEnv(e.target.value)}
               aria-label="Filter by environment"
             >
               {environmentOptions.map((option) => (
@@ -384,15 +305,8 @@ export default function AuditLogsPage() {
                               <span className="audit-event-action">
                                 {getAuditActionLabel(log.action)}
                               </span>
-                              <span
-                                className={`badge ${log.source === 'cli_auth' ? 'badge-info' : 'badge-neutral'}`}
-                              >
-                                {log.source === 'cli_auth' ? 'CLI Auth' : 'Project'}
-                              </span>
                               {log.environment_name && (
-                                <span
-                                  className={`badge badge-env badge-env-${log.environment_name}`}
-                                >
+                                <span className={`badge badge-env badge-env-${log.environment_name}`}>
                                   {log.environment_name}
                                 </span>
                               )}
@@ -415,17 +329,6 @@ export default function AuditLogsPage() {
                   </div>
                 ))}
               </div>
-              {nextCursor && (
-                <div className="audit-load-more">
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={handleLoadMore}
-                    disabled={isLoadingMore}
-                  >
-                    {isLoadingMore ? 'Loading…' : 'Load more'}
-                  </button>
-                </div>
-              )}
             </div>
           )}
         </>
