@@ -13,16 +13,19 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import Checkbox from '../components/Checkbox';
 import CodeBlock from '../components/CodeBlock';
 import ConfirmDialog from '../components/ConfirmDialog';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
+  bulkDeleteSecrets,
   createSecret,
   deleteSecret,
+  isAbortError,
   listMembers,
-  listSecrets,
+  listProjectSecrets,
   pullSecrets,
   pushSecrets,
   revealSecret,
@@ -30,20 +33,42 @@ import {
   ApiError,
 } from '../lib/api';
 import { parseDotenv, serializeDotenv } from '../lib/dotenv';
-import { formatRelativeTime } from '../lib/format';
+import { formatDate, formatRelativeTime } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getDefaultEnvironmentId } from '../lib/secrets';
-import type { Project, Environment, Secret } from '../types/api';
+import type { Project, Environment, Secret, ProjectSecret, Member } from '../types/api';
 
 interface OutletContextType {
   currentEnv: string;
   currentProject: Project;
   environments: Environment[];
+  pageCache: ProjectPageCacheApi;
   refreshSecretStats: () => Promise<void>;
 }
 
 interface SecretWithEnv extends Secret {
   environment: string;
   environment_id: string;
+}
+
+interface RevealedSecretState {
+  value: string;
+  version: number;
+}
+
+interface CopiedSecretState {
+  secretId: string;
+  version: number;
+}
+
+interface SecretsQueryCacheEntry {
+  secrets: SecretWithEnv[];
+  nextCursor: string | null;
+  cachedAt: number;
+}
+
+interface TeamCacheEntry {
+  members: Member[];
 }
 
 interface UploadResult {
@@ -59,33 +84,152 @@ interface ExportResult {
   totalKeys: number;
 }
 
+const SECRET_PAGE_SIZE = 100;
+const SECRET_CACHE_TTL_MS = 30_000;
+
 function buildSecretId(secret: SecretWithEnv): string {
   return `${secret.environment_id}:${secret.key}`;
+}
+
+function buildSecretsQueryKey(
+  projectId: string,
+  environmentIds: string[],
+  key: string
+): string {
+  return `${projectId}::${environmentIds.join(',')}::${key}`;
+}
+
+function mapProjectSecret(secret: ProjectSecret): SecretWithEnv {
+  return {
+    ...secret,
+    environment: secret.environment_name,
+  };
+}
+
+function mergeSecretPages(
+  currentSecrets: SecretWithEnv[],
+  nextSecrets: SecretWithEnv[]
+): SecretWithEnv[] {
+  const byId = new Map<string, SecretWithEnv>();
+  [...currentSecrets, ...nextSecrets].forEach((secret) => {
+    byId.set(buildSecretId(secret), secret);
+  });
+
+  return [...byId.values()].sort((left, right) => {
+    const keyComparison = left.key.localeCompare(right.key);
+    if (keyComparison !== 0) {
+      return keyComparison;
+    }
+
+    return left.environment.localeCompare(right.environment);
+  });
 }
 
 function getEnvironmentBadgeClass(environmentName: string): string {
   return `badge badge-env badge-env-${String(environmentName || '').toLowerCase()}`;
 }
 
+function toLocalDateTimeInput(dateString: string | null | undefined): string {
+  if (!dateString) {
+    return '';
+  }
+
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function toIsoFromLocalDateTimeInput(value: string): string | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
+function formatSecretExpiry(expiresAt: string | null): string {
+  if (!expiresAt) {
+    return 'Never';
+  }
+
+  const expiry = new Date(expiresAt);
+  if (Number.isNaN(expiry.getTime())) {
+    return 'Never';
+  }
+
+  if (expiry.getTime() <= Date.now()) {
+    return `Expired ${formatDate(expiresAt)}`;
+  }
+
+  return formatDate(expiresAt);
+}
+
 export default function SecretsPage() {
-  const { currentEnv, currentProject, environments, refreshSecretStats } =
+  const { currentEnv, currentProject, environments, pageCache, refreshSecretStats } =
     useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError, currentUser, authUser } = useAuth();
+  const membershipEmail = currentUser?.email ?? authUser?.email ?? null;
+  const initialVisibleEnvironments =
+    currentEnv === 'all'
+      ? environments
+      : environments.filter((environment) => environment.name === currentEnv);
+  const initialVisibleEnvironmentIds = initialVisibleEnvironments
+    .map((environment) => environment.id)
+    .sort();
+  const secretsPageCacheKey = `secrets:queries:${currentProject.id}`;
+  const teamCacheKey = `team:${currentProject.id}`;
+  const accessCacheKey = `secrets:access:${currentProject.id}:${String(membershipEmail ?? 'anon').toLowerCase()}`;
+  const initialSecretsCache =
+    pageCache.get<Map<string, SecretsQueryCacheEntry>>(secretsPageCacheKey) ?? new Map();
+  const initialSecretsQueryKey = buildSecretsQueryKey(
+    currentProject.id,
+    initialVisibleEnvironmentIds,
+    ''
+  );
+  const initialSecretsEntry = initialSecretsCache.get(initialSecretsQueryKey);
+  const cachedTeam = pageCache.get<TeamCacheEntry>(teamCacheKey);
+  const initialSecretAccessState: 'enabled' | 'checking' | 'disabled' =
+    currentProject.role === 'owner'
+      ? 'enabled'
+      : cachedTeam && membershipEmail
+        ? cachedTeam.members.find(
+            (member) =>
+              String(member.email || '').toLowerCase() === String(membershipEmail || '').toLowerCase()
+          )?.can_push_pull_secrets === false
+          ? 'disabled'
+          : 'enabled'
+        : pageCache.get<'enabled' | 'checking' | 'disabled'>(accessCacheKey) ??
+          (membershipEmail ? 'checking' : 'enabled');
   const [search, setSearch] = useState('');
-  const [secrets, setSecrets] = useState<SecretWithEnv[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [secrets, setSecrets] = useState<SecretWithEnv[]>(() => initialSecretsEntry?.secrets ?? []);
+  const [nextCursor, setNextCursor] = useState<string | null>(() => initialSecretsEntry?.nextCursor ?? null);
+  const [isLoading, setIsLoading] = useState(
+    () => initialSecretAccessState !== 'disabled' && !initialSecretsEntry
+  );
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [secretAccessState, setSecretAccessState] = useState<'enabled' | 'checking' | 'disabled'>(
-    currentProject.role === 'owner' ? 'enabled' : 'checking'
+    initialSecretAccessState
   );
-  const [revealedValues, setRevealedValues] = useState<Record<string, string>>({});
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [revealedValues, setRevealedValues] = useState<Record<string, RevealedSecretState>>({});
+  const [copiedSecret, setCopiedSecret] = useState<CopiedSecretState | null>(null);
   const [showSecretModal, setShowSecretModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create');
   const [secretKey, setSecretKey] = useState('');
   const [secretValue, setSecretValue] = useState('');
+  const [secretExpiresAt, setSecretExpiresAt] = useState('');
   const [secretEnvironmentId, setSecretEnvironmentId] = useState('');
   const [uploadEnvironmentId, setUploadEnvironmentId] = useState('');
   const [uploadContent, setUploadContent] = useState('');
@@ -101,7 +245,11 @@ export default function SecretsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [activeSecretId, setActiveSecretId] = useState<string | null>(null);
   const [secretPendingDelete, setSecretPendingDelete] = useState<SecretWithEnv | null>(null);
+  const [selectedSecretIds, setSelectedSecretIds] = useState<string[]>([]);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const secretsCacheRef = useRef<Map<string, SecretsQueryCacheEntry>>(initialSecretsCache);
 
   const visibleEnvironments = useMemo(() => {
     if (currentEnv === 'all') {
@@ -111,7 +259,29 @@ export default function SecretsPage() {
     return environments.filter((environment) => environment.name === currentEnv);
   }, [currentEnv, environments]);
 
-  const membershipEmail = currentUser?.email ?? authUser?.email ?? null;
+  const visibleEnvironmentIds = useMemo(
+    () => visibleEnvironments.map((environment) => environment.id).sort(),
+    [visibleEnvironments]
+  );
+  const secretsQueryKey = useMemo(
+    () => buildSecretsQueryKey(currentProject.id, visibleEnvironmentIds, appliedSearch),
+    [appliedSearch, currentProject.id, visibleEnvironmentIds]
+  );
+  const isSearchPending = search.trim() !== appliedSearch;
+
+  useEffect(() => {
+    pageCache.set(secretsPageCacheKey, secretsCacheRef.current);
+  }, [pageCache, secretsPageCacheKey]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setAppliedSearch(search.trim());
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [search]);
 
   useEffect(() => {
     if (!accessToken || apiConfigError) {
@@ -120,11 +290,28 @@ export default function SecretsPage() {
 
     if (currentProject.role === 'owner') {
       setSecretAccessState('enabled');
+      pageCache.set(accessCacheKey, 'enabled');
       return undefined;
     }
 
     if (!membershipEmail) {
       setSecretAccessState('enabled');
+      pageCache.set(accessCacheKey, 'enabled');
+      return undefined;
+    }
+
+    const cachedTeamMembers = pageCache.get<TeamCacheEntry>(teamCacheKey)?.members;
+    if (cachedTeamMembers) {
+      const cachedMembership = cachedTeamMembers.find(
+        (member) =>
+          String(member.email || '').toLowerCase() === String(membershipEmail || '').toLowerCase()
+      );
+      const nextState =
+        cachedMembership && cachedMembership.can_push_pull_secrets === false
+          ? 'disabled'
+          : 'enabled';
+      setSecretAccessState(nextState);
+      pageCache.set(accessCacheKey, nextState);
       return undefined;
     }
 
@@ -151,9 +338,15 @@ export default function SecretsPage() {
         setSecretAccessState(
           membership && membership.can_push_pull_secrets === false ? 'disabled' : 'enabled'
         );
+        pageCache.set<TeamCacheEntry>(teamCacheKey, { members });
+        pageCache.set(
+          accessCacheKey,
+          membership && membership.can_push_pull_secrets === false ? 'disabled' : 'enabled'
+        );
       } catch {
         if (isActive && !controller.signal.aborted) {
           setSecretAccessState('enabled');
+          pageCache.set(accessCacheKey, 'enabled');
         }
       }
     }
@@ -164,7 +357,7 @@ export default function SecretsPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, currentProject.role, membershipEmail]);
+  }, [accessCacheKey, accessToken, apiConfigError, currentProject.id, currentProject.role, membershipEmail, pageCache, teamCacheKey]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -184,6 +377,7 @@ export default function SecretsPage() {
 
     if (secretAccessState === 'disabled') {
       setSecrets([]);
+      setNextCursor(null);
       setError(null);
       setIsLoading(false);
       return undefined;
@@ -191,6 +385,7 @@ export default function SecretsPage() {
 
     if (visibleEnvironments.length === 0) {
       setSecrets([]);
+      setNextCursor(null);
       setError(null);
       setIsLoading(false);
       return undefined;
@@ -198,60 +393,65 @@ export default function SecretsPage() {
 
     let isActive = true;
     const controller = new AbortController();
+    const cachedEntry = secretsCacheRef.current.get(secretsQueryKey);
+    const cacheIsFresh =
+      cachedEntry !== undefined && Date.now() - cachedEntry.cachedAt < SECRET_CACHE_TTL_MS;
+
+    if (cachedEntry) {
+      setSecrets(cachedEntry.secrets);
+      setNextCursor(cachedEntry.nextCursor);
+      setIsLoading(false);
+    } else if (secrets.length === 0) {
+      setIsLoading(true);
+    }
 
     async function loadSecrets() {
-      setIsLoading(true);
       setError(null);
 
       try {
-        const responses = await Promise.all(
-          visibleEnvironments.map((environment) =>
-            listSecrets(currentProject.id, environment.id, accessToken!, {
-              signal: controller.signal,
-            }).then((response) => ({
-              environment,
-              response,
-            }))
-          )
-        );
+        if (cacheIsFresh) {
+          return;
+        }
+
+        const response = await listProjectSecrets(currentProject.id, accessToken!, {
+          signal: controller.signal,
+          key: appliedSearch || undefined,
+          environmentIds: visibleEnvironmentIds,
+          limit: SECRET_PAGE_SIZE,
+        });
 
         if (!isActive) {
           return;
         }
 
-        const nextSecrets: SecretWithEnv[] = responses
-          .flatMap(({ environment, response }) =>
-            response.secrets.map((secret) => ({
-              ...secret,
-              environment: environment.name,
-              environment_id: environment.id,
-            }))
-          )
-          .sort((left, right) => {
-            const keyComparison = left.key.localeCompare(right.key);
-            if (keyComparison !== 0) {
-              return keyComparison;
-            }
-
-            return left.environment.localeCompare(right.environment);
-          });
+        const nextSecrets = response.secrets.map(mapProjectSecret);
 
         setSecrets(nextSecrets);
-        setRevealedValues({});
-        setCopiedId(null);
+        setNextCursor(response.next_cursor);
+        secretsCacheRef.current.set(secretsQueryKey, {
+          secrets: nextSecrets,
+          nextCursor: response.next_cursor,
+          cachedAt: Date.now(),
+        });
+        pageCache.set(secretsPageCacheKey, secretsCacheRef.current);
       } catch (loadError) {
-        if (!isActive || controller.signal.aborted) {
+        if (!isActive || controller.signal.aborted || isAbortError(loadError)) {
           return;
         }
 
         const apiError = loadError as ApiError;
         if (apiError.status === 403) {
           setSecretAccessState('disabled');
+          pageCache.set(accessCacheKey, 'disabled');
           setError(null);
           setSecrets([]);
+          setNextCursor(null);
         } else {
           setError(apiError.message || 'Failed to load secrets.');
-          setSecrets([]);
+          if (!cachedEntry) {
+            setSecrets([]);
+            setNextCursor(null);
+          }
         }
       } finally {
         if (isActive) {
@@ -266,11 +466,31 @@ export default function SecretsPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, secretAccessState, visibleEnvironments]);
+  }, [
+    accessToken,
+    apiConfigError,
+    appliedSearch,
+    currentProject.id,
+    pageCache,
+    secretAccessState,
+    secrets.length,
+    secretsPageCacheKey,
+    secretsQueryKey,
+    visibleEnvironments.length,
+    visibleEnvironmentIds,
+  ]);
 
-  const filteredSecrets = secrets.filter((secret) =>
-    secret.key.toLowerCase().includes(search.toLowerCase())
+  const filteredSecrets = secrets;
+  const filteredSecretIds = useMemo(
+    () => filteredSecrets.map((secret) => buildSecretId(secret)),
+    [filteredSecrets]
   );
+  const selectedSecrets = useMemo(
+    () => filteredSecrets.filter((secret) => selectedSecretIds.includes(buildSecretId(secret))),
+    [filteredSecrets, selectedSecretIds]
+  );
+  const allVisibleSelected =
+    filteredSecretIds.length > 0 && filteredSecretIds.every((secretId) => selectedSecretIds.includes(secretId));
 
   const defaultEnvironmentId = getDefaultEnvironmentId(currentEnv, environments);
   const canUseSecrets = secretAccessState === 'enabled';
@@ -278,11 +498,53 @@ export default function SecretsPage() {
   const cliEnvironmentName =
     currentEnv === 'all' ? environments[0]?.name || 'dev' : currentEnv;
 
+  const syncVisibleSecretState = (nextSecrets: SecretWithEnv[]) => {
+    const visibleVersions = new Map(
+      nextSecrets.map((secret) => [buildSecretId(secret), secret.version] as const)
+    );
+
+    setRevealedValues((current) => {
+      let didChange = false;
+      const next = { ...current };
+
+      Object.entries(current).forEach(([secretId, revealed]) => {
+        const visibleVersion = visibleVersions.get(secretId);
+        if (visibleVersion !== undefined && visibleVersion !== revealed.version) {
+          delete next[secretId];
+          didChange = true;
+        }
+      });
+
+      return didChange ? next : current;
+    });
+
+    setCopiedSecret((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const visibleVersion = visibleVersions.get(current.secretId);
+      if (visibleVersion !== undefined && visibleVersion !== current.version) {
+        return null;
+      }
+
+      return current;
+    });
+  };
+
+  useEffect(() => {
+    syncVisibleSecretState(secrets);
+  }, [secrets]);
+
+  useEffect(() => {
+    setSelectedSecretIds((current) => current.filter((secretId) => filteredSecretIds.includes(secretId)));
+  }, [filteredSecretIds]);
+
   const revealSecretValue = async (secret: SecretWithEnv): Promise<string> => {
     const secretId = buildSecretId(secret);
     const cachedValue = revealedValues[secretId];
-    if (cachedValue !== undefined) {
-      return cachedValue;
+    if (cachedValue && cachedValue.version === secret.version) {
+      return cachedValue.value;
     }
 
     setActiveSecretId(secretId);
@@ -295,7 +557,13 @@ export default function SecretsPage() {
         secret.key,
         accessToken!
       );
-      setRevealedValues((current) => ({ ...current, [secretId]: response.value }));
+      setRevealedValues((current) => ({
+        ...current,
+        [secretId]: {
+          value: response.value,
+          version: secret.version,
+        },
+      }));
       return response.value;
     } catch (revealError) {
       setError((revealError as Error).message || 'Failed to reveal secret.');
@@ -307,14 +575,11 @@ export default function SecretsPage() {
 
   const toggleReveal = async (secret: SecretWithEnv) => {
     const secretId = buildSecretId(secret);
-    if (revealedValues[secretId] !== undefined) {
-      setRevealedValues((current) => {
-        const next = { ...current };
-        delete next[secretId];
-        return next;
-      });
-      if (copiedId === secretId) {
-        setCopiedId(null);
+    const currentRevealed = revealedValues[secretId];
+    if (currentRevealed && currentRevealed.version === secret.version) {
+      clearSecretClientState(secretId);
+      if (copiedSecret?.secretId === secretId) {
+        setCopiedSecret(null);
       }
       return;
     }
@@ -330,10 +595,19 @@ export default function SecretsPage() {
     const secretId = buildSecretId(secret);
 
     try {
-      const value = revealedValues[secretId] ?? (await revealSecretValue(secret));
+      const value =
+        revealedValues[secretId]?.version === secret.version
+          ? revealedValues[secretId]!.value
+          : await revealSecretValue(secret);
       await navigator.clipboard.writeText(value);
-      setCopiedId(secretId);
-      setTimeout(() => setCopiedId(null), 2000);
+      setCopiedSecret({ secretId, version: secret.version });
+      window.setTimeout(() => {
+        setCopiedSecret((current) =>
+          current && current.secretId === secretId && current.version === secret.version
+            ? null
+            : current
+        );
+      }, 2000);
     } catch {
       // The page-level error state is already updated by revealSecretValue.
     }
@@ -343,6 +617,7 @@ export default function SecretsPage() {
     setModalMode('create');
     setSecretKey('');
     setSecretValue('');
+    setSecretExpiresAt('');
     setSecretEnvironmentId(defaultEnvironmentId);
     setMutationError(null);
     setShowSecretModal(true);
@@ -371,6 +646,7 @@ export default function SecretsPage() {
       setModalMode('edit');
       setSecretKey(secret.key);
       setSecretValue(value);
+      setSecretExpiresAt(toLocalDateTimeInput(secret.expires_at));
       setSecretEnvironmentId(secret.environment_id);
       setMutationError(null);
       setShowSecretModal(true);
@@ -412,41 +688,130 @@ export default function SecretsPage() {
     setExportError(null);
   };
 
+  const invalidateProjectSecretsCache = () => {
+    const nextCache = new Map(secretsCacheRef.current);
+
+    nextCache.forEach((_value, key) => {
+      if (key.startsWith(`${currentProject.id}::`)) {
+        nextCache.delete(key);
+      }
+    });
+
+    secretsCacheRef.current = nextCache;
+    pageCache.set(secretsPageCacheKey, secretsCacheRef.current);
+  };
+
+  const clearSecretClientState = (secretId: string) => {
+    setRevealedValues((current) => {
+      if (!(secretId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[secretId];
+      return next;
+    });
+    setCopiedSecret((current) =>
+      current && current.secretId === secretId ? null : current
+    );
+  };
+
+  const clearEnvironmentClientState = (environmentId: string) => {
+    setRevealedValues((current) => {
+      let didChange = false;
+      const next = { ...current };
+
+      Object.keys(current).forEach((secretId) => {
+        if (secretId.startsWith(`${environmentId}:`)) {
+          delete next[secretId];
+          didChange = true;
+        }
+      });
+
+      return didChange ? next : current;
+    });
+    setCopiedSecret((current) =>
+      current && current.secretId.startsWith(`${environmentId}:`) ? null : current
+    );
+  };
+
   const reloadSecrets = async () => {
-    if (!accessToken || visibleEnvironments.length === 0) {
+    if (!accessToken || secretAccessState !== 'enabled' || visibleEnvironments.length === 0) {
       setSecrets([]);
+      setNextCursor(null);
       return;
     }
 
-    const responses = await Promise.all(
-      visibleEnvironments.map((environment) =>
-        listSecrets(currentProject.id, environment.id, accessToken).then((response) => ({
-          environment,
-          response,
-        }))
-      )
-    );
-
-    const nextSecrets: SecretWithEnv[] = responses
-      .flatMap(({ environment, response }) =>
-        response.secrets.map((secret) => ({
-          ...secret,
-          environment: environment.name,
-          environment_id: environment.id,
-        }))
-      )
-      .sort((left, right) => {
-        const keyComparison = left.key.localeCompare(right.key);
-        if (keyComparison !== 0) {
-          return keyComparison;
-        }
-
-        return left.environment.localeCompare(right.environment);
-      });
+    const response = await listProjectSecrets(currentProject.id, accessToken, {
+      key: appliedSearch || undefined,
+      environmentIds: visibleEnvironmentIds,
+      limit: SECRET_PAGE_SIZE,
+    });
+    const nextSecrets = response.secrets.map(mapProjectSecret);
 
     setSecrets(nextSecrets);
-    setRevealedValues({});
-    setCopiedId(null);
+    setNextCursor(response.next_cursor);
+    secretsCacheRef.current.set(secretsQueryKey, {
+      secrets: nextSecrets,
+      nextCursor: response.next_cursor,
+      cachedAt: Date.now(),
+    });
+    pageCache.set(secretsPageCacheKey, secretsCacheRef.current);
+  };
+
+  const handleLoadMore = async () => {
+    if (!accessToken || !nextCursor || isLoadingMore || secretAccessState !== 'enabled') {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    setError(null);
+
+    try {
+      const response = await listProjectSecrets(currentProject.id, accessToken, {
+        key: appliedSearch || undefined,
+        environmentIds: visibleEnvironmentIds,
+        limit: SECRET_PAGE_SIZE,
+        cursor: nextCursor,
+      });
+      const appendedSecrets = response.secrets.map(mapProjectSecret);
+
+      setSecrets((current) => {
+        const mergedSecrets = mergeSecretPages(current, appendedSecrets);
+        secretsCacheRef.current.set(secretsQueryKey, {
+          secrets: mergedSecrets,
+          nextCursor: response.next_cursor,
+          cachedAt: Date.now(),
+        });
+        pageCache.set(secretsPageCacheKey, secretsCacheRef.current);
+        return mergedSecrets;
+      });
+      setNextCursor(response.next_cursor);
+    } catch (loadError) {
+      if (!isAbortError(loadError)) {
+        setError((loadError as Error).message || 'Failed to load more secrets.');
+      }
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  const toggleSecretSelection = (secretId: string) => {
+    setSelectedSecretIds((current) =>
+      current.includes(secretId)
+        ? current.filter((id) => id !== secretId)
+        : [...current, secretId]
+    );
+  };
+
+  const toggleSelectAllVisibleSecrets = () => {
+    setSelectedSecretIds((current) => {
+      if (allVisibleSelected) {
+        return current.filter((secretId) => !filteredSecretIds.includes(secretId));
+      }
+
+      return [...new Set([...current, ...filteredSecretIds])];
+    });
   };
 
   const handleSaveSecret = async () => {
@@ -470,13 +835,19 @@ export default function SecretsPage() {
         await createSecret(currentProject.id, secretEnvironmentId, accessToken!, {
           key: trimmedKey,
           value: secretValue,
+          expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
         });
       } else {
         await updateSecret(currentProject.id, secretEnvironmentId, trimmedKey, accessToken!, {
           value: secretValue,
+          expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
         });
       }
 
+      if (modalMode === 'edit') {
+        clearSecretClientState(`${secretEnvironmentId}:${trimmedKey}`);
+      }
+      invalidateProjectSecretsCache();
       await reloadSecrets();
       try {
         await refreshSecretStats();
@@ -499,14 +870,8 @@ export default function SecretsPage() {
 
     try {
       await deleteSecret(currentProject.id, secret.environment_id, secret.key, accessToken!);
-      setRevealedValues((current) => {
-        const next = { ...current };
-        delete next[secretId];
-        return next;
-      });
-      if (copiedId === secretId) {
-        setCopiedId(null);
-      }
+      clearSecretClientState(secretId);
+      invalidateProjectSecretsCache();
       await reloadSecrets();
       try {
         await refreshSecretStats();
@@ -518,6 +883,41 @@ export default function SecretsPage() {
     } finally {
       setActiveSecretId(null);
       setSecretPendingDelete(null);
+    }
+  };
+
+  const handleBulkDeleteSecrets = async () => {
+    if (selectedSecrets.length === 0) {
+      setShowBulkDeleteConfirm(false);
+      return;
+    }
+
+    setIsBulkDeleting(true);
+    setError(null);
+
+    try {
+      await bulkDeleteSecrets(currentProject.id, accessToken!, {
+        items: selectedSecrets.map((secret) => ({
+          environment_id: secret.environment_id,
+          key: secret.key,
+        })),
+      });
+      selectedSecrets.forEach((secret) => {
+        clearSecretClientState(buildSecretId(secret));
+      });
+      setSelectedSecretIds([]);
+      setShowBulkDeleteConfirm(false);
+      invalidateProjectSecretsCache();
+      await reloadSecrets();
+      try {
+        await refreshSecretStats();
+      } catch {
+        // Keep the secret table fresh even if the metadata refresh fails.
+      }
+    } catch (bulkDeleteError) {
+      setError((bulkDeleteError as Error).message || 'Failed to delete selected secrets.');
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -575,6 +975,8 @@ export default function SecretsPage() {
         (environment) => environment.id === uploadEnvironmentId
       );
 
+      clearEnvironmentClientState(uploadEnvironmentId);
+      invalidateProjectSecretsCache();
       await reloadSecrets();
       try {
         await refreshSecretStats();
@@ -658,6 +1060,14 @@ export default function SecretsPage() {
         </div>
         <div className="page-header-actions">
           <button
+            className="btn btn-danger"
+            onClick={() => setShowBulkDeleteConfirm(true)}
+            disabled={!canUseSecrets || selectedSecrets.length === 0 || isBulkDeleting}
+          >
+            <Trash2 size={14} />
+            Delete Selected
+          </button>
+          <button
             className="btn btn-secondary"
             id="bulk-download-btn"
             onClick={openExportModal}
@@ -740,9 +1150,18 @@ export default function SecretsPage() {
             id="secrets-search"
           />
         </div>
-        <span className="secrets-count">
-          {filteredSecrets.length} secret{filteredSecrets.length !== 1 ? 's' : ''}
-        </span>
+        <div className="secrets-toolbar-meta">
+          {isSearchPending && <span className="secrets-search-status">Searching…</span>}
+          {selectedSecrets.length > 0 && (
+            <span className="secrets-selected-count">
+              {selectedSecrets.length} selected
+            </span>
+          )}
+          <span className="secrets-count">
+            Showing {filteredSecrets.length} secret{filteredSecrets.length !== 1 ? 's' : ''}
+            {nextCursor ? '+' : ''}
+          </span>
+        </div>
       </div>
 
       {isSecretAccessDenied ? (
@@ -759,16 +1178,12 @@ export default function SecretsPage() {
           <p>Create an environment first before adding secrets.</p>
         </div>
       ) : isLoading ? (
-        <DashboardLoader
-          compact
-          title="Loading secrets"
-          description="Fetching secrets for the selected environment scope."
-        />
+        <SectionLoader label="Loading secrets" />
       ) : filteredSecrets.length === 0 ? (
         <div className="empty-state">
           <h3>No secrets found</h3>
           <p>
-            {search
+            {appliedSearch
               ? 'Try a different search term.'
               : currentEnv === 'all'
                 ? 'Add a secret to any environment in this project.'
@@ -785,10 +1200,20 @@ export default function SecretsPage() {
             <table id="secrets-table">
               <thead>
                 <tr>
+                  <th style={{ width: 40 }}>
+                    <Checkbox
+                      checked={allVisibleSelected}
+                      indeterminate={selectedSecretIds.length > 0 && !allVisibleSelected}
+                      onChange={toggleSelectAllVisibleSecrets}
+                      aria-label="Select all visible secrets"
+                      disabled={!canUseSecrets || isBulkDeleting}
+                    />
+                  </th>
                   <th>Key</th>
                   <th>Value</th>
                   <th>Environment</th>
                   <th>Version</th>
+                  <th>Expires</th>
                   <th>Updated</th>
                   <th>By</th>
                   <th style={{ width: 140 }}>Actions</th>
@@ -797,12 +1222,22 @@ export default function SecretsPage() {
               <tbody>
                 {filteredSecrets.map((secret) => {
                   const secretId = buildSecretId(secret);
-                  const revealedValue = revealedValues[secretId];
-                  const isRevealed = revealedValue !== undefined;
-                  const isCopied = copiedId === secretId;
+                  const revealedEntry = revealedValues[secretId];
+                  const isRevealed = revealedEntry?.version === secret.version;
+                  const revealedValue = isRevealed ? revealedEntry.value : undefined;
+                  const isCopied =
+                    copiedSecret?.secretId === secretId && copiedSecret.version === secret.version;
                   const isBusy = activeSecretId === secretId;
                   return (
                     <tr key={secretId}>
+                      <td className="table-checkbox-cell">
+                        <Checkbox
+                          checked={selectedSecretIds.includes(secretId)}
+                          onChange={() => toggleSecretSelection(secretId)}
+                          aria-label={`Select secret ${secret.key}`}
+                          disabled={!canUseSecrets || isBulkDeleting}
+                        />
+                      </td>
                       <td>
                         <code className="secret-key">{secret.key}</code>
                       </td>
@@ -819,6 +1254,7 @@ export default function SecretsPage() {
                         </span>
                       </td>
                       <td className="text-mono text-sm">v{secret.version}</td>
+                      <td className="text-secondary">{formatSecretExpiry(secret.expires_at)}</td>
                       <td className="text-secondary">{formatRelativeTime(secret.updated_at)}</td>
                       <td className="text-secondary">
                         {secret.updated_by_email || 'Unknown user'}
@@ -873,6 +1309,22 @@ export default function SecretsPage() {
               </tbody>
             </table>
           </div>
+          {nextCursor && (
+            <div className="secrets-pagination">
+              <span className="secrets-pagination-meta">
+                More matching secrets are available.
+              </span>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  void handleLoadMore();
+                }}
+                disabled={isLoadingMore}
+              >
+                {isLoadingMore ? 'Loading...' : 'Load More'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1098,6 +1550,18 @@ export default function SecretsPage() {
             ))}
           </select>
         </div>
+        <div className="form-group">
+          <label htmlFor="secret-expiry-input">Expiration Date</label>
+          <input
+            id="secret-expiry-input"
+            className="input"
+            type="datetime-local"
+            value={secretExpiresAt}
+            onChange={(event) => setSecretExpiresAt(event.target.value)}
+            disabled={isSubmitting}
+          />
+          <p className="secrets-upload-hint">Leave blank for no expiration.</p>
+        </div>
         {mutationError && (
           <p className="secrets-form-error" role="alert">
             {mutationError}
@@ -1128,6 +1592,25 @@ export default function SecretsPage() {
           }
         }}
         isBusy={Boolean(secretPendingDelete && activeSecretId === buildSecretId(secretPendingDelete))}
+      />
+      <ConfirmDialog
+        isOpen={showBulkDeleteConfirm}
+        title="Delete Selected Secrets"
+        description={
+          selectedSecrets.length > 0
+            ? `Delete ${selectedSecrets.length} selected secret${selectedSecrets.length !== 1 ? 's' : ''}?`
+            : 'Delete selected secrets?'
+        }
+        confirmLabel="Delete Selected"
+        onConfirm={() => {
+          void handleBulkDeleteSecrets();
+        }}
+        onClose={() => {
+          if (!isBulkDeleting) {
+            setShowBulkDeleteConfirm(false);
+          }
+        }}
+        isBusy={isBulkDeleting}
       />
     </div>
   );

@@ -11,8 +11,9 @@ import {
   Share2,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
@@ -26,6 +27,7 @@ import {
   ApiError,
 } from '../lib/api';
 import { formatDate, formatRelativeTime } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import type { Project, Environment, RuntimeToken, RuntimeTokenShare, Member } from '../types/api';
 
 interface OutletContextType {
@@ -34,6 +36,12 @@ interface OutletContextType {
   environments: Environment[];
   canManageProject: boolean;
   onRuntimeTokenCountChanged: (delta: number) => void;
+  pageCache: ProjectPageCacheApi;
+}
+
+interface TokensCacheEntry {
+  membersById: Record<string, Member>;
+  tokens: RuntimeToken[];
 }
 
 interface ShareState {
@@ -120,11 +128,16 @@ export default function TokensPage() {
     environments,
     canManageProject,
     onRuntimeTokenCountChanged,
+    pageCache,
   } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
-  const [tokens, setTokens] = useState<RuntimeToken[]>([]);
-  const [membersById, setMembersById] = useState<Record<string, Member>>({});
-  const [isLoading, setIsLoading] = useState(true);
+  const tokensCacheKey = `tokens:${currentProject.id}`;
+  const cachedTokensData = pageCache.get<TokensCacheEntry>(tokensCacheKey);
+  const [tokens, setTokens] = useState<RuntimeToken[]>(() => cachedTokensData?.tokens ?? []);
+  const [membersById, setMembersById] = useState<Record<string, Member>>(
+    () => cachedTokensData?.membersById ?? {}
+  );
+  const [isLoading, setIsLoading] = useState(() => !cachedTokensData);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [tokenName, setTokenName] = useState('');
@@ -144,6 +157,9 @@ export default function TokensPage() {
   const [copiedToken, setCopiedToken] = useState(false);
   const [activeTokenId, setActiveTokenId] = useState<string | null>(null);
   const [tokenPendingRevoke, setTokenPendingRevoke] = useState<RuntimeToken | null>(null);
+  const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
+  const [isBulkRevoking, setIsBulkRevoking] = useState(false);
+  const [showBulkRevokeConfirm, setShowBulkRevokeConfirm] = useState(false);
 
   const environmentById = useMemo(
     () => Object.fromEntries(environments.map((environment) => [environment.id, environment])),
@@ -157,6 +173,27 @@ export default function TokensPage() {
 
     return tokens.filter((token) => environmentById[token.environment_id]?.name === currentEnv);
   }, [currentEnv, environmentById, tokens]);
+
+  const revokeableTokenIds = useMemo(
+    () =>
+      visibleTokens
+        .filter((token) => getRuntimeTokenStatus(token) !== 'revoked')
+        .map((token) => token.id),
+    [visibleTokens]
+  );
+  const selectedTokens = useMemo(
+    () => visibleTokens.filter((token) => selectedTokenIds.includes(token.id)),
+    [visibleTokens, selectedTokenIds]
+  );
+  const allRevokeableSelected =
+    revokeableTokenIds.length > 0 &&
+    revokeableTokenIds.every((id) => selectedTokenIds.includes(id));
+
+  useEffect(() => {
+    setSelectedTokenIds((current) =>
+      current.filter((id) => visibleTokens.some((token) => token.id === id))
+    );
+  }, [visibleTokens]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -173,6 +210,11 @@ export default function TokensPage() {
     const controller = new AbortController();
 
     async function loadTokenData() {
+      if (cachedTokensData) {
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
 
@@ -190,6 +232,10 @@ export default function TokensPage() {
         setMembersById(
           Object.fromEntries(memberResponse.map((member) => [member.user_id, member]))
         );
+        pageCache.set<TokensCacheEntry>(tokensCacheKey, {
+          tokens: tokenResponse,
+          membersById: Object.fromEntries(memberResponse.map((member) => [member.user_id, member])),
+        });
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -210,7 +256,16 @@ export default function TokensPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id]);
+  }, [accessToken, apiConfigError, cachedTokensData, currentProject.id, pageCache, tokensCacheKey]);
+
+  useEffect(() => {
+    if (!isLoading && !error) {
+      pageCache.set<TokensCacheEntry>(tokensCacheKey, {
+        tokens,
+        membersById,
+      });
+    }
+  }, [error, isLoading, membersById, pageCache, tokens, tokensCacheKey]);
 
   const reloadTokens = async () => {
     const tokenResponse = await listRuntimeTokens(currentProject.id, accessToken!);
@@ -421,6 +476,45 @@ export default function TokensPage() {
     }
   };
 
+  const toggleTokenSelection = (tokenId: string) => {
+    setSelectedTokenIds((current) =>
+      current.includes(tokenId)
+        ? current.filter((id) => id !== tokenId)
+        : [...current, tokenId]
+    );
+  };
+
+  const toggleSelectAllTokens = () => {
+    if (allRevokeableSelected) {
+      setSelectedTokenIds([]);
+      return;
+    }
+    setSelectedTokenIds(revokeableTokenIds);
+  };
+
+  const handleBulkRevokeTokens = async () => {
+    if (selectedTokens.length === 0) {
+      setShowBulkRevokeConfirm(false);
+      return;
+    }
+    setIsBulkRevoking(true);
+    setError(null);
+    try {
+      const toRevoke = selectedTokens.filter(
+        (token) => getRuntimeTokenStatus(token) !== 'revoked'
+      );
+      await Promise.all(toRevoke.map((token) => revokeRuntimeToken(token.id, accessToken!)));
+      onRuntimeTokenCountChanged(-toRevoke.length);
+      setSelectedTokenIds([]);
+      setShowBulkRevokeConfirm(false);
+      await reloadTokens();
+    } catch (bulkRevokeError) {
+      setError((bulkRevokeError as Error).message || 'Failed to revoke selected tokens.');
+    } finally {
+      setIsBulkRevoking(false);
+    }
+  };
+
   const handleCopyToken = (value: string) => {
     navigator.clipboard.writeText(value);
     setCopiedToken(true);
@@ -450,6 +544,16 @@ export default function TokensPage() {
           </p>
         </div>
         <div className="page-header-actions">
+          {canManageProject && (
+            <button
+              className="btn btn-danger"
+              onClick={() => setShowBulkRevokeConfirm(true)}
+              disabled={selectedTokenIds.length === 0 || isBulkRevoking}
+            >
+              <ShieldX size={14} />
+              Revoke Selected
+            </button>
+          )}
           <button
             className="btn btn-primary"
             onClick={openCreateModal}
@@ -481,11 +585,7 @@ export default function TokensPage() {
           <p>Create an environment before issuing runtime tokens.</p>
         </div>
       ) : isLoading ? (
-        <DashboardLoader
-          compact
-          title="Loading runtime tokens"
-          description="Fetching tokens available to this project membership."
-        />
+        <SectionLoader label="Loading runtime tokens" />
       ) : visibleTokens.length === 0 ? (
         <div className="empty-state">
           <h3>No runtime tokens found</h3>
@@ -511,6 +611,17 @@ export default function TokensPage() {
             <table id="tokens-table">
               <thead>
                 <tr>
+                  {canManageProject && (
+                    <th style={{ width: 40 }}>
+                      <Checkbox
+                        checked={allRevokeableSelected}
+                        indeterminate={selectedTokenIds.length > 0 && !allRevokeableSelected}
+                        onChange={toggleSelectAllTokens}
+                        aria-label="Select all tokens"
+                        disabled={isBulkRevoking || revokeableTokenIds.length === 0}
+                      />
+                    </th>
+                  )}
                   <th>Name</th>
                   <th>Environment</th>
                   <th>Created By</th>
@@ -531,6 +642,18 @@ export default function TokensPage() {
 
                   return (
                     <tr key={token.id}>
+                      {canManageProject && (
+                        <td className="table-checkbox-cell">
+                          {status !== 'revoked' && (
+                            <Checkbox
+                              checked={selectedTokenIds.includes(token.id)}
+                              onChange={() => toggleTokenSelection(token.id)}
+                              aria-label={`Select token ${token.name}`}
+                              disabled={isBulkRevoking || isBusy}
+                            />
+                          )}
+                        </td>
+                      )}
                       <td>
                         <code className="secret-key">{token.name}</code>
                       </td>
@@ -792,6 +915,19 @@ export default function TokensPage() {
           }
         }}
         isBusy={Boolean(activeTokenId)}
+      />
+      <ConfirmDialog
+        isOpen={showBulkRevokeConfirm}
+        title="Revoke Selected Tokens"
+        description={`Revoke ${selectedTokens.length} selected token${selectedTokens.length !== 1 ? 's' : ''}? This cannot be undone.`}
+        confirmLabel="Revoke Tokens"
+        onConfirm={() => { void handleBulkRevokeTokens(); }}
+        onClose={() => {
+          if (!isBulkRevoking) {
+            setShowBulkRevokeConfirm(false);
+          }
+        }}
+        isBusy={isBulkRevoking}
       />
     </div>
   );

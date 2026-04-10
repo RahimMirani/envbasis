@@ -33,6 +33,7 @@ from app.services.runtime_tokens import (
     generate_runtime_token,
     hash_runtime_token,
 )
+from app.services.webhooks import dispatch_webhooks, get_webhooks_for_event
 
 router = APIRouter()
 
@@ -172,8 +173,10 @@ def create_runtime_token(
         action="runtime_token.created",
         metadata={"token_id": str(token.id), "name": token.name},
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="runtime_token.created")
     db.commit()
     db.refresh(token)
+    dispatch_webhooks(webhook_targets, event="runtime_token.created", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"token_id": str(token.id), "name": token.name})
     return RuntimeTokenCreateResponse(
         id=token.id,
         project_id=token.project_id,
@@ -432,8 +435,13 @@ def revoke_runtime_token_by_name(
         action="runtime_token.revoked",
         metadata={"token_id": str(token.id), "name": token.name, "lookup": "name"},
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="runtime_token.revoked")
+    _wh_meta = {"token_id": str(token.id), "name": token.name}
+    _wh_project_id = project_access.project.id
+    _wh_env_id = token.environment_id
     db.delete(token)
     db.commit()
+    dispatch_webhooks(webhook_targets, event="runtime_token.revoked", project_id=_wh_project_id, environment_id=_wh_env_id, actor_user_id=current_user.id, metadata=_wh_meta)
     return MessageResponse(detail="Runtime token revoked.")
 
 
@@ -517,6 +525,10 @@ def revoke_runtime_token(
         action="runtime_token.revoked",
         metadata={"token_id": str(token.id), "name": token.name},
     )
+    webhook_targets = get_webhooks_for_event(db, project_id=project.id, action="runtime_token.revoked")
+    _wh_meta = {"token_id": str(token.id), "name": token.name}
+    _wh_env_id = token.environment_id
     db.delete(token)
     db.commit()
+    dispatch_webhooks(webhook_targets, event="runtime_token.revoked", project_id=project.id, environment_id=_wh_env_id, actor_user_id=current_user.id, metadata=_wh_meta)
     return MessageResponse(detail="Runtime token revoked.")

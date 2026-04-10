@@ -28,6 +28,7 @@ class SecretItemRead(BaseModel):
     key: str
     version: int
     updated_at: datetime
+    expires_at: datetime | None = None
     updated_by_user_id: uuid.UUID | None = None
     updated_by_email: str | None = None
 
@@ -39,6 +40,7 @@ class SecretRevealResponse(BaseModel):
     value: str
     version: int
     updated_at: datetime
+    expires_at: datetime | None = None
     updated_by_user_id: uuid.UUID | None = None
     updated_by_email: str | None = None
     revealed_at: datetime
@@ -48,6 +50,18 @@ class SecretListResponse(BaseModel):
     project_id: uuid.UUID
     environment_id: uuid.UUID
     secrets: list[SecretItemRead]
+    generated_at: datetime
+
+
+class ProjectSecretItemRead(SecretItemRead):
+    environment_id: uuid.UUID
+    environment_name: str
+
+
+class ProjectSecretListResponse(BaseModel):
+    project_id: uuid.UUID
+    secrets: list[ProjectSecretItemRead]
+    next_cursor: str | None = None
     generated_at: datetime
 
 
@@ -69,10 +83,12 @@ class ProjectSecretStatsResponse(BaseModel):
 class SecretCreateRequest(BaseModel):
     key: str = Field(min_length=1, max_length=128)
     value: str
+    expires_at: datetime | None = None
 
 
 class SecretUpdateRequest(BaseModel):
     value: str
+    expires_at: datetime | None = None
 
 
 class SecretMutationResponse(BaseModel):
@@ -81,6 +97,7 @@ class SecretMutationResponse(BaseModel):
     key: str
     version: int
     updated_at: datetime
+    expires_at: datetime | None = None
     changed: bool
 
 
@@ -107,3 +124,12 @@ class SecretPullResponse(BaseModel):
     secrets: dict[str, str]
     versions: dict[str, int]
     generated_at: datetime
+
+
+class SecretBulkDeleteItem(BaseModel):
+    environment_id: uuid.UUID
+    key: str = Field(min_length=1, max_length=128)
+
+
+class SecretBulkDeleteRequest(BaseModel):
+    items: list[SecretBulkDeleteItem] = Field(min_length=1)

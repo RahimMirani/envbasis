@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
 import TopBar from '../components/TopBar';
 import Sidebar from '../components/Sidebar';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
-import { getProject, listEnvironments, getProjectSecretStats, listProjects } from '../lib/api';
+import {
+  getProject,
+  listEnvironments,
+  getProjectSecretStats,
+  listProjects,
+} from '../lib/api';
+import { createProjectPageCache } from '../lib/projectPageCache';
+import { markProjectVisited } from '../lib/projectDiscovery';
 import type { Project, Environment, SecretStats } from '../types/api';
 
 export default function ProjectLayout() {
@@ -20,9 +27,14 @@ export default function ProjectLayout() {
   const [currentEnv, setCurrentEnv] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const pageCacheRef = useRef(createProjectPageCache());
 
   const projectBasePath = `/projects/${projectId}`;
   const canManageProject = currentProject?.role === 'owner';
+
+  useEffect(() => {
+    pageCacheRef.current.clear();
+  }, [projectId]);
 
   useEffect(() => {
     if (!accessToken || !projectId) {
@@ -131,6 +143,14 @@ export default function ProjectLayout() {
     }
   }, [currentEnv, environments]);
 
+  useEffect(() => {
+    if (!currentProject?.id) {
+      return;
+    }
+
+    markProjectVisited(currentProject.id);
+  }, [currentProject?.id]);
+
   const refreshSecretStats = useCallback(async () => {
     if (!accessToken || !projectId) {
       return;
@@ -169,19 +189,58 @@ export default function ProjectLayout() {
     );
     setCurrentProject((current) =>
       current
-        ? {
-            ...current,
-            environment_count: (current.environment_count || 0) + 1,
-          }
+        ? { ...current, environment_count: (current.environment_count || 0) + 1 }
         : current
     );
     setProjects((current) =>
       current.map((project) =>
         project.id === environment.project_id
-          ? {
-              ...project,
-              environment_count: (project.environment_count || 0) + 1,
-            }
+          ? { ...project, environment_count: (project.environment_count || 0) + 1 }
+          : project
+      )
+    );
+  };
+
+  const handleEnvironmentUpdated = (updated: Environment) => {
+    setEnvironments((current) =>
+      current.map((env) => (env.id === updated.id ? updated : env))
+    );
+    setSecretStats((current) =>
+      current
+        ? {
+            ...current,
+            environments: current.environments.map((item) =>
+              item.environment_id === updated.id
+                ? { ...item, environment_name: updated.name }
+                : item
+            ),
+          }
+        : current
+    );
+  };
+
+  const handleEnvironmentDeleted = (envId: string) => {
+    setEnvironments((current) => current.filter((env) => env.id !== envId));
+    setSecretStats((current) =>
+      current
+        ? {
+            ...current,
+            environments: current.environments.filter((item) => item.environment_id !== envId),
+            total_secret_count: current.environments
+              .filter((item) => item.environment_id !== envId)
+              .reduce((sum, item) => sum + item.secret_count, 0),
+          }
+        : current
+    );
+    setCurrentProject((current) =>
+      current
+        ? { ...current, environment_count: Math.max(0, (current.environment_count || 0) - 1) }
+        : current
+    );
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === projectId
+          ? { ...project, environment_count: Math.max(0, (project.environment_count || 0) - 1) }
           : project
       )
     );
@@ -245,7 +304,11 @@ export default function ProjectLayout() {
   };
 
   if (isLoading) {
-    return <DashboardLoader title="Loading project" description="Fetching project details." />;
+    return (
+      <div className="project-layout-loading">
+        <SectionLoader label="Loading project" />
+      </div>
+    );
   }
 
   if (error || !currentProject) {
@@ -286,8 +349,11 @@ export default function ProjectLayout() {
               canManageProject,
               secretStats,
               isSecretStatsLoading,
+              pageCache: pageCacheRef.current,
               refreshSecretStats,
               onEnvironmentCreated: handleEnvironmentCreated,
+              onEnvironmentUpdated: handleEnvironmentUpdated,
+              onEnvironmentDeleted: handleEnvironmentDeleted,
               onProjectUpdated: handleProjectUpdated,
               onMemberCountChanged: handleMemberCountChanged,
               onRuntimeTokenCountChanged: handleRuntimeTokenCountChanged,

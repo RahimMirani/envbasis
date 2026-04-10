@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Shield, UserPlus, UserX } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
-import DashboardLoader from '../components/DashboardLoader';
+import Checkbox from '../components/Checkbox';
+import ConfirmDialog from '../components/ConfirmDialog';
+import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
+  bulkRevokeMembers,
   inviteMember,
   listMembers,
   listProjectInvitations,
@@ -12,7 +15,8 @@ import {
   revokeProjectInvitation,
   updateMemberSecretAccess,
 } from '../lib/api';
-import { formatDate } from '../lib/format';
+import { formatDate, formatRelativeTime } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
 import type { Project, Member, ApiErrorDetails, ProjectInvitation } from '../types/api';
 import { ApiError } from '../lib/api';
@@ -21,15 +25,26 @@ interface OutletContextType {
   currentProject: Project;
   canManageProject: boolean;
   onMemberCountChanged: (delta: number) => void;
+  pageCache: ProjectPageCacheApi;
+}
+
+interface TeamCacheEntry {
+  members: Member[];
+  pendingInvites: ProjectInvitation[];
 }
 
 interface RevokeConflict {
-  member: Member;
+  members: Member[];
   detail: {
     code?: string;
     message?: string;
     shared_tokens?: Array<{ id: string; name: string }>;
     revealed_shared_tokens?: Array<{ id: string; name: string }>;
+    members?: Array<{
+      email: string;
+      shared_tokens: Array<{ id: string; name: string }>;
+      revealed_shared_tokens: Array<{ id: string; name: string }>;
+    }>;
   };
 }
 
@@ -59,12 +74,57 @@ function formatInviteError(error: ApiError | Error | null): string {
   return error.message || 'Failed to invite member.';
 }
 
+function getInviteCooldownMs(cooldownUntil: string | null, nowMs: number): number {
+  if (!cooldownUntil) {
+    return 0;
+  }
+
+  return Math.max(0, new Date(cooldownUntil).getTime() - nowMs);
+}
+
+function formatDuration(ms: number): string {
+  const totalMinutes = Math.ceil(ms / 60000);
+  if (totalMinutes <= 1) {
+    return 'under 1 minute';
+  }
+
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    if (hours > 0) {
+      return `${days}d ${hours}h`;
+    }
+    return `${days}d`;
+  }
+
+  if (hours > 0) {
+    if (minutes > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${hours}h`;
+  }
+
+  return `${minutes}m`;
+}
+
+function formatInviteLastSent(lastSentAt: string | null): string {
+  if (!lastSentAt) {
+    return 'Not sent yet';
+  }
+
+  return formatRelativeTime(lastSentAt);
+}
+
 export default function TeamPage() {
-  const { currentProject, canManageProject, onMemberCountChanged } =
+  const { currentProject, canManageProject, onMemberCountChanged, pageCache } =
     useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
-  const [members, setMembers] = useState<Member[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const teamCacheKey = `team:${currentProject.id}`;
+  const cachedTeam = pageCache.get<TeamCacheEntry>(teamCacheKey);
+  const [members, setMembers] = useState<Member[]>(() => cachedTeam?.members ?? []);
+  const [isLoading, setIsLoading] = useState(() => !cachedTeam);
   const [error, setError] = useState<string | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -74,8 +134,16 @@ export default function TeamPage() {
   const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
   const [revokeConflict, setRevokeConflict] = useState<RevokeConflict | null>(null);
   const [keepActiveConfirm, setKeepActiveConfirm] = useState(false);
-  const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>(() => cachedTeam?.pendingInvites ?? []);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
+  const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
+  const [selectedInviteIds, setSelectedInviteIds] = useState<string[]>([]);
+  const [isBulkRevokingInvites, setIsBulkRevokingInvites] = useState(false);
+  const [showBulkRevokeInvitesConfirm, setShowBulkRevokeInvitesConfirm] = useState(false);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [bulkMembersPendingRevoke, setBulkMembersPendingRevoke] = useState<Member[]>([]);
+  const [isBulkRevoking, setIsBulkRevoking] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     if (!accessToken) {
@@ -92,6 +160,11 @@ export default function TeamPage() {
     const controller = new AbortController();
 
     async function loadMembers() {
+      if (cachedTeam) {
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
 
@@ -113,6 +186,10 @@ export default function TeamPage() {
 
         setMembers(response);
         setPendingInvites(invites);
+        pageCache.set<TeamCacheEntry>(teamCacheKey, {
+          members: response,
+          pendingInvites: invites,
+        });
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -134,7 +211,55 @@ export default function TeamPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, canManageProject]);
+  }, [accessToken, apiConfigError, cachedTeam, canManageProject, currentProject.id, pageCache, teamCacheKey]);
+
+  useEffect(() => {
+    if (!isLoading && !error) {
+      pageCache.set<TeamCacheEntry>(teamCacheKey, {
+        members,
+        pendingInvites,
+      });
+    }
+  }, [error, isLoading, members, pageCache, pendingInvites, teamCacheKey]);
+
+  useEffect(() => {
+    setSelectedMemberIds((current) =>
+      current.filter((memberId) => members.some((member) => member.user_id === memberId && member.role !== 'owner'))
+    );
+  }, [members]);
+
+  useEffect(() => {
+    setSelectedInviteIds((current) =>
+      current.filter((id) => pendingInvites.some((inv) => inv.id === id))
+    );
+  }, [pendingInvites]);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    const hasActiveCooldown = pendingInvites.some((inv) => getInviteCooldownMs(inv.cooldown_until, Date.now()) > 0);
+    if (!hasActiveCooldown) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 60000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [pendingInvites]);
+
+  const selectedMembers = members.filter((member) => selectedMemberIds.includes(member.user_id));
+  const revocableMembers = members.filter((member) => member.role !== 'owner');
+  const allRevocableSelected =
+    revocableMembers.length > 0 &&
+    revocableMembers.every((member) => selectedMemberIds.includes(member.user_id));
+
+  const selectedInvites = pendingInvites.filter((inv) => selectedInviteIds.includes(inv.id));
+  const allInvitesSelected =
+    pendingInvites.length > 0 &&
+    pendingInvites.every((inv) => selectedInviteIds.includes(inv.id));
 
   const closeInviteModal = () => {
     if (isInviting) {
@@ -220,20 +345,136 @@ export default function TeamPage() {
     }
   };
 
-  const attemptRevokeMember = async (member: Member, sharedTokenAction: string | null = null) => {
-    setActiveMemberEmail(member.email);
+  const handleResendPendingInvite = async (invitation: ProjectInvitation) => {
+    if (!accessToken) {
+      return;
+    }
+
+    setResendingInviteId(invitation.id);
     setError(null);
 
     try {
-      await revokeMember(currentProject.id, accessToken!, {
-        email: member.email,
-        ...(sharedTokenAction ? { shared_token_action: sharedTokenAction } : {}),
+      const result = await inviteMember(currentProject.id, accessToken, {
+        email: invitation.email,
+        role: 'member',
+        can_push_pull_secrets: invitation.can_push_pull_secrets,
       });
 
-      setMembers((currentMembers) =>
-        currentMembers.filter((currentMember) => currentMember.user_id !== member.user_id)
+      setPendingInvites((current) => {
+        const others = current.filter((pendingInvite) => pendingInvite.id !== result.invitation.id);
+        return [result.invitation, ...others];
+      });
+
+      if (!result.email_sent && result.message) {
+        setError(result.message);
+      }
+    } catch (resendErrorValue) {
+      setError(formatInviteError(resendErrorValue as ApiError));
+    } finally {
+      setResendingInviteId(null);
+    }
+  };
+
+  const toggleInviteSelection = (inviteId: string) => {
+    setSelectedInviteIds((current) =>
+      current.includes(inviteId)
+        ? current.filter((id) => id !== inviteId)
+        : [...current, inviteId]
+    );
+  };
+
+  const toggleSelectAllInvites = () => {
+    if (allInvitesSelected) {
+      setSelectedInviteIds([]);
+    } else {
+      setSelectedInviteIds(pendingInvites.map((inv) => inv.id));
+    }
+  };
+
+  const handleBulkRevokeInvites = async () => {
+    if (selectedInvites.length === 0) {
+      setShowBulkRevokeInvitesConfirm(false);
+      return;
+    }
+    setIsBulkRevokingInvites(true);
+    setError(null);
+    try {
+      await Promise.all(
+        selectedInvites.map((inv) =>
+          revokeProjectInvitation(currentProject.id, inv.id, accessToken!)
+        )
       );
-      onMemberCountChanged(-1);
+      setPendingInvites((current) =>
+        current.filter((inv) => !selectedInvites.some((s) => s.id === inv.id))
+      );
+      setSelectedInviteIds([]);
+      setShowBulkRevokeInvitesConfirm(false);
+    } catch (err) {
+      setError((err as Error).message || 'Failed to revoke selected invitations.');
+    } finally {
+      setIsBulkRevokingInvites(false);
+    }
+  };
+
+  const toggleMemberSelection = (memberId: string) => {
+    setSelectedMemberIds((current) =>
+      current.includes(memberId)
+        ? current.filter((id) => id !== memberId)
+        : [...current, memberId]
+    );
+  };
+
+  const toggleSelectAllMembers = () => {
+    if (allRevocableSelected) {
+      setSelectedMemberIds([]);
+      return;
+    }
+
+    setSelectedMemberIds(revocableMembers.map((member) => member.user_id));
+  };
+
+  const attemptRevokeMembers = async (
+    revokeMembers: Member[],
+    sharedTokenAction: string | null = null
+  ) => {
+    if (revokeMembers.length === 0) {
+      return;
+    }
+
+    const isBulk = revokeMembers.length > 1;
+    if (isBulk) {
+      setIsBulkRevoking(true);
+      setBulkMembersPendingRevoke([]);
+    } else {
+      setActiveMemberEmail(revokeMembers[0].email);
+    }
+    setError(null);
+
+    try {
+      if (isBulk) {
+        await bulkRevokeMembers(currentProject.id, accessToken!, {
+          emails: revokeMembers.map((member) => member.email),
+          ...(sharedTokenAction ? { shared_token_action: sharedTokenAction } : {}),
+        });
+      } else {
+        await revokeMember(currentProject.id, accessToken!, {
+          email: revokeMembers[0].email,
+          ...(sharedTokenAction ? { shared_token_action: sharedTokenAction } : {}),
+        });
+      }
+
+      setMembers((currentMembers) =>
+        currentMembers.filter(
+          (currentMember) =>
+            !revokeMembers.some((revokeMemberItem) => revokeMemberItem.user_id === currentMember.user_id)
+        )
+      );
+      setSelectedMemberIds((current) =>
+        current.filter(
+          (memberId) => !revokeMembers.some((revokeMemberItem) => revokeMemberItem.user_id === memberId)
+        )
+      );
+      onMemberCountChanged(-revokeMembers.length);
       setRevokeConflict(null);
       setKeepActiveConfirm(false);
     } catch (revokeErrorValue) {
@@ -241,13 +482,14 @@ export default function TeamPage() {
       const detail = (apiError.details as ApiErrorDetails)?.detail;
       if (detail?.code === 'shared_runtime_token_confirmation_required') {
         setRevokeConflict({
-          member,
+          members: revokeMembers,
           detail,
         });
       } else {
         setError(apiError.message || 'Failed to revoke member.');
       }
     } finally {
+      setIsBulkRevoking(false);
       setActiveMemberEmail(null);
     }
   };
@@ -262,6 +504,14 @@ export default function TeamPage() {
           </p>
         </div>
         <div className="page-header-actions">
+          <button
+            className="btn btn-danger"
+            onClick={() => setBulkMembersPendingRevoke(selectedMembers)}
+            disabled={!canManageProject || selectedMembers.length === 0 || isBulkRevoking}
+          >
+            <UserX size={14} />
+            Revoke Selected
+          </button>
           <button
             className="btn btn-primary"
             onClick={() => setShowInvite(true)}
@@ -287,54 +537,116 @@ export default function TeamPage() {
       )}
 
       {canManageProject && pendingInvites.length > 0 && (
-        <div className="card" style={{ marginBottom: '1rem' }}>
-          <h3 className="page-subtitle" style={{ margin: '0 0 12px' }}>
-            Pending invitations
-          </h3>
+        <div className="card pending-invites-card">
+          <div className="pending-invites-header">
+            <span className="pending-invites-title">Pending Invitations</span>
+            <span className="badge badge-neutral">{pendingInvites.length}</span>
+            {selectedInvites.length > 0 && (
+              <button
+                className="btn btn-danger btn-sm"
+                style={{ marginLeft: 'auto' }}
+                onClick={() => setShowBulkRevokeInvitesConfirm(true)}
+                disabled={isBulkRevokingInvites}
+              >
+                <UserX size={13} />
+                Revoke {selectedInvites.length} selected
+              </button>
+            )}
+          </div>
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
-                  <th>Email</th>
+                  <th style={{ width: 40 }}>
+                    <Checkbox
+                      checked={allInvitesSelected}
+                      indeterminate={selectedInviteIds.length > 0 && !allInvitesSelected}
+                      onChange={toggleSelectAllInvites}
+                      aria-label="Select all invitations"
+                      disabled={isBulkRevokingInvites}
+                    />
+                  </th>
+                  <th>Recipient</th>
                   <th>Secrets access</th>
+                  <th>Delivery</th>
                   <th>Expires</th>
-                  <th>Sent</th>
-                  <th style={{ width: 100 }}>Actions</th>
+                  <th style={{ width: 180 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {pendingInvites.map((inv) => (
-                  <tr key={inv.id}>
-                    <td className="mono">{inv.email}</td>
-                    <td>{inv.can_push_pull_secrets ? 'Yes' : 'No'}</td>
-                    <td className="text-secondary">{formatDate(inv.expires_at)}</td>
-                    <td className="text-secondary">{inv.send_count}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm btn-danger-subtle"
-                        onClick={() => handleRevokePendingInvite(inv)}
-                        disabled={revokingInviteId === inv.id}
-                      >
-                        Revoke
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {pendingInvites.map((inv) => {
+                  const cooldownMs = getInviteCooldownMs(inv.cooldown_until, nowMs);
+                  const cooldownActive = cooldownMs > 0;
+                  const isBusy =
+                    revokingInviteId === inv.id || resendingInviteId === inv.id || isBulkRevokingInvites;
+
+                  return (
+                    <tr key={inv.id}>
+                      <td className="table-checkbox-cell">
+                        <Checkbox
+                          checked={selectedInviteIds.includes(inv.id)}
+                          onChange={() => toggleInviteSelection(inv.id)}
+                          aria-label={`Select invitation for ${inv.email}`}
+                          disabled={isBusy}
+                        />
+                      </td>
+                      <td className="mono">{inv.email}</td>
+                      <td>
+                        <span className={`badge ${inv.can_push_pull_secrets ? 'badge-success' : 'badge-neutral'}`}>
+                          {inv.can_push_pull_secrets ? 'Yes' : 'No'}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="team-invite-delivery">
+                          <span className="team-invite-meta">
+                            Sent {inv.send_count} email{inv.send_count === 1 ? '' : 's'}
+                          </span>
+                          <span className="team-invite-meta">
+                            Last sent {formatInviteLastSent(inv.last_sent_at)}
+                          </span>
+                          <span className={cooldownActive ? 'team-invite-cooldown' : 'team-invite-meta'}>
+                            {cooldownActive ? `Resend in ${formatDuration(cooldownMs)}` : 'Ready to resend'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="text-secondary">{formatDate(inv.expires_at)}</td>
+                      <td>
+                        <div className="team-invite-actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => handleResendPendingInvite(inv)}
+                            disabled={isBusy || cooldownActive}
+                          >
+                            {resendingInviteId === inv.id ? 'Sending...' : 'Resend'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm btn-danger-subtle"
+                            onClick={() => handleRevokePendingInvite(inv)}
+                            disabled={isBusy}
+                          >
+                            {revokingInviteId === inv.id ? 'Revoking...' : 'Revoke'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {pendingInvites.some((p) => p.cooldown_until) && (
-            <p className="text-secondary" style={{ fontSize: 13, marginTop: 8 }}>
-              After two invite emails to the same address, this project must wait 5 days before sending
-              more.
+          {pendingInvites.some((p) => getInviteCooldownMs(p.cooldown_until, nowMs) > 0) && (
+            <p className="pending-invites-note">
+              After two invite emails to the same address, resend pauses for 5 days. The delivery
+              column shows the remaining cooldown and the last time an invite email was sent.
             </p>
           )}
         </div>
       )}
 
       {isLoading ? (
-        <DashboardLoader compact title="Loading team" description="Fetching project members." />
+        <SectionLoader label="Loading team" />
       ) : members.length === 0 ? (
         <div className="empty-state">
           <h3>No members yet</h3>
@@ -352,6 +664,15 @@ export default function TeamPage() {
             <table id="team-table">
               <thead>
                 <tr>
+                  <th style={{ width: 40 }}>
+                    <Checkbox
+                      checked={allRevocableSelected}
+                      indeterminate={selectedMemberIds.length > 0 && !allRevocableSelected}
+                      onChange={toggleSelectAllMembers}
+                      aria-label="Select all members"
+                      disabled={!canManageProject || isBulkRevoking}
+                    />
+                  </th>
                   <th>Member</th>
                   <th>Role</th>
                   <th>Secrets Access</th>
@@ -362,10 +683,20 @@ export default function TeamPage() {
               <tbody>
                 {members.map((member) => {
                   const isOwner = member.role === 'owner';
-                  const isBusy = activeMemberEmail === member.email;
+                  const isBusy = isBulkRevoking || activeMemberEmail === member.email;
 
                   return (
                     <tr key={member.user_id}>
+                      <td className="table-checkbox-cell">
+                        {!isOwner && (
+                          <Checkbox
+                            checked={selectedMemberIds.includes(member.user_id)}
+                            onChange={() => toggleMemberSelection(member.user_id)}
+                            aria-label={`Select member ${member.email}`}
+                            disabled={!canManageProject || isBusy}
+                          />
+                        )}
+                      </td>
                       <td>
                         <div className="member-cell">
                           <div className="member-avatar">{getUserInitials(member)}</div>
@@ -397,7 +728,9 @@ export default function TeamPage() {
                             className="btn btn-ghost btn-icon btn-sm btn-danger-subtle"
                             data-tooltip="Revoke Access"
                             aria-label="Revoke access"
-                            onClick={() => attemptRevokeMember(member)}
+                            onClick={() => {
+                              void attemptRevokeMembers([member]);
+                            }}
                             disabled={!canManageProject || isBusy}
                           >
                             <UserX size={14} />
@@ -491,7 +824,7 @@ export default function TeamPage() {
               </button>
               <button
                 className="btn btn-danger"
-                onClick={() => revokeConflict && attemptRevokeMember(revokeConflict.member, 'keep_active')}
+                onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'keep_active')}
               >
                 Yes, Keep Tokens Active
               </button>
@@ -515,7 +848,7 @@ export default function TeamPage() {
               </button>
               <button
                 className="btn btn-danger"
-                onClick={() => revokeConflict && attemptRevokeMember(revokeConflict.member, 'revoke_tokens')}
+                onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'revoke_tokens')}
               >
                 Revoke Tokens Too
               </button>
@@ -533,37 +866,75 @@ export default function TeamPage() {
             ) : (
               <>
                 <p className="team-modal-copy">
-                  This member has shared runtime tokens. Choose whether to keep them active or revoke them.
+                  {revokeConflict.members.length === 1
+                    ? 'This member has shared runtime tokens. Choose whether to keep them active or revoke them.'
+                    : 'Some selected members have shared runtime tokens. Choose whether to keep them active or revoke them.'}
                 </p>
-                {Array.isArray(revokeConflict.detail.shared_tokens) &&
-                  revokeConflict.detail.shared_tokens.length > 0 && (
-                    <div className="team-token-list">
-                      <p className="team-modal-copy" style={{ marginBottom: 6 }}>Shared tokens:</p>
-                      {revokeConflict.detail.shared_tokens.map((token) => (
-                        <span className="badge badge-neutral" key={token.id}>
-                          {token.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                {Array.isArray(revokeConflict.detail.revealed_shared_tokens) &&
-                  revokeConflict.detail.revealed_shared_tokens.length > 0 && (
-                    <div className="team-token-list" style={{ marginTop: 12 }}>
+                {(revokeConflict.detail.members ??
+                  [
+                    {
+                      email: revokeConflict.members[0]?.email || '',
+                      shared_tokens: revokeConflict.detail.shared_tokens || [],
+                      revealed_shared_tokens: revokeConflict.detail.revealed_shared_tokens || [],
+                    },
+                  ]).map((conflictMember) => (
+                    <div key={conflictMember.email} className="team-bulk-conflict-block">
                       <p className="team-modal-copy" style={{ marginBottom: 6 }}>
-                        Already revealed by this member:
+                        <strong>{conflictMember.email}</strong>
                       </p>
-                      {revokeConflict.detail.revealed_shared_tokens.map((token) => (
-                        <span className="badge badge-warning" key={token.id}>
-                          {token.name}
-                        </span>
-                      ))}
+                      {conflictMember.shared_tokens.length > 0 && (
+                        <div className="team-token-list">
+                          {conflictMember.shared_tokens.map((token) => (
+                            <span className="badge badge-neutral" key={token.id}>
+                              {token.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {conflictMember.revealed_shared_tokens.length > 0 && (
+                        <div className="team-token-list" style={{ marginTop: 12 }}>
+                          {conflictMember.revealed_shared_tokens.map((token) => (
+                            <span className="badge badge-warning" key={token.id}>
+                              {token.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  ))}
               </>
             )}
           </>
         )}
       </Modal>
+      <ConfirmDialog
+        isOpen={bulkMembersPendingRevoke.length > 0}
+        title="Revoke Selected Members"
+        description={`Revoke access for ${bulkMembersPendingRevoke.length} selected member${bulkMembersPendingRevoke.length !== 1 ? 's' : ''}?`}
+        confirmLabel="Revoke Members"
+        onConfirm={() => {
+          void attemptRevokeMembers(bulkMembersPendingRevoke);
+        }}
+        onClose={() => {
+          if (!isBulkRevoking) {
+            setBulkMembersPendingRevoke([]);
+          }
+        }}
+        isBusy={isBulkRevoking}
+      />
+      <ConfirmDialog
+        isOpen={showBulkRevokeInvitesConfirm}
+        title="Revoke Selected Invitations"
+        description={`Revoke ${selectedInvites.length} pending invitation${selectedInvites.length !== 1 ? 's' : ''}? The recipients will no longer be able to join.`}
+        confirmLabel="Revoke Invitations"
+        onConfirm={() => { void handleBulkRevokeInvites(); }}
+        onClose={() => {
+          if (!isBulkRevokingInvites) {
+            setShowBulkRevokeInvitesConfirm(false);
+          }
+        }}
+        isBusy={isBulkRevokingInvites}
+      />
     </div>
   );
 }

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 from datetime import datetime, timezone
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, aliased
 
@@ -93,6 +97,70 @@ def list_audit_logs(
         )
         for audit_log, actor_email, environment_name in rows
     ]
+
+
+@router.get("/{project_id}/audit-logs/export")
+def export_audit_logs(
+    project_id: uuid.UUID,
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+    project_access: ProjectAccess = Depends(require_project_owner),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    actor = aliased(User)
+    environment = aliased(Environment)
+
+    rows = db.execute(
+        select(AuditLog, actor.email, environment.name)
+        .outerjoin(actor, actor.id == AuditLog.user_id)
+        .outerjoin(environment, environment.id == AuditLog.environment_id)
+        .where(AuditLog.project_id == project_access.project.id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(10_000)
+    ).all()
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"audit-logs-{project_id}-{timestamp}.{format}"
+
+    if format == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["id", "created_at", "action", "actor_email", "environment_name", "environment_id", "user_id", "metadata"])
+        for audit_log, actor_email, environment_name in rows:
+            writer.writerow([
+                str(audit_log.id),
+                audit_log.created_at.isoformat(),
+                audit_log.action,
+                actor_email or "",
+                environment_name or "",
+                str(audit_log.environment_id) if audit_log.environment_id else "",
+                str(audit_log.user_id) if audit_log.user_id else "",
+                json.dumps(audit_log.metadata_json) if audit_log.metadata_json else "",
+            ])
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    records = [
+        {
+            "id": str(audit_log.id),
+            "created_at": audit_log.created_at.isoformat(),
+            "action": audit_log.action,
+            "actor_email": actor_email,
+            "environment_name": environment_name,
+            "environment_id": str(audit_log.environment_id) if audit_log.environment_id else None,
+            "user_id": str(audit_log.user_id) if audit_log.user_id else None,
+            "metadata": audit_log.metadata_json,
+        }
+        for audit_log, actor_email, environment_name in rows
+    ]
+    return StreamingResponse(
+        iter([json.dumps(records, indent=2)]),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @unified_router.get("/unified", response_model=UnifiedAuditLogListResponse)

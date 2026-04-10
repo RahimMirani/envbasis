@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { Plus, Activity, Clock, KeyRound } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Plus, Activity, Clock, KeyRound, Pencil, Trash2 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
+import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
-import { createEnvironment } from '../lib/api';
+import { createEnvironment, renameEnvironment, deleteEnvironment } from '../lib/api';
 import { formatDate, formatRelativeTime, getEnvironmentColor } from '../lib/format';
 import type { Project, Environment, SecretStats } from '../types/api';
 
@@ -12,6 +13,8 @@ interface OutletContextType {
   environments: Environment[];
   canManageProject: boolean;
   onEnvironmentCreated: (env: Environment) => void;
+  onEnvironmentUpdated: (env: Environment) => void;
+  onEnvironmentDeleted: (envId: string) => void;
   secretStats: SecretStats | null;
   isSecretStatsLoading: boolean;
 }
@@ -22,59 +25,111 @@ export default function EnvironmentsPage() {
     environments,
     canManageProject,
     onEnvironmentCreated,
+    onEnvironmentUpdated,
+    onEnvironmentDeleted,
     secretStats,
     isSecretStatsLoading,
   } = useOutletContext<OutletContextType>();
   const { accessToken } = useAuth();
+
+  // Create
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [name, setName] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Rename
+  const [envPendingRename, setEnvPendingRename] = useState<Environment | null>(null);
+  const [renameName, setRenameName] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete
+  const [envPendingDelete, setEnvPendingDelete] = useState<Environment | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const secretStatsByEnvironmentId = new Map(
     (secretStats?.environments || []).map((item) => [item.environment_id, item])
   );
 
+  // --- Create ---
   const openCreateModal = () => {
     setShowCreateModal(true);
-    setName('');
-    setError(null);
+    setCreateName('');
+    setCreateError(null);
   };
 
   const closeCreateModal = () => {
-    if (isSubmitting) {
-      return;
-    }
-
+    if (isCreating) return;
     setShowCreateModal(false);
-    setName('');
-    setError(null);
+    setCreateName('');
+    setCreateError(null);
   };
 
-  const handleCreateEnvironment = async () => {
-    const trimmedName = name.trim();
-
-    if (!trimmedName) {
-      setError('Environment name is required.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
+  const handleCreate = async () => {
+    const trimmed = createName.trim();
+    if (!trimmed) { setCreateError('Environment name is required.'); return; }
+    setIsCreating(true);
+    setCreateError(null);
     try {
-      const environment = await createEnvironment(currentProject.id, accessToken!, {
-        name: trimmedName,
-      });
-
+      const environment = await createEnvironment(currentProject.id, accessToken!, { name: trimmed });
       onEnvironmentCreated(environment);
       setShowCreateModal(false);
-      setName('');
-      setError(null);
-    } catch (createError) {
-      setError((createError as Error).message || 'Failed to create environment.');
+      setCreateName('');
+    } catch (err) {
+      setCreateError((err as Error).message || 'Failed to create environment.');
     } finally {
-      setIsSubmitting(false);
+      setIsCreating(false);
+    }
+  };
+
+  // --- Rename ---
+  const openRenameModal = (env: Environment) => {
+    setEnvPendingRename(env);
+    setRenameName(env.name);
+    setRenameError(null);
+  };
+
+  const closeRenameModal = () => {
+    if (isRenaming) return;
+    setEnvPendingRename(null);
+    setRenameName('');
+    setRenameError(null);
+  };
+
+  const handleRename = async () => {
+    if (!envPendingRename) return;
+    const trimmed = renameName.trim();
+    if (!trimmed) { setRenameError('Environment name is required.'); return; }
+    if (trimmed === envPendingRename.name) { closeRenameModal(); return; }
+    setIsRenaming(true);
+    setRenameError(null);
+    try {
+      const updated = await renameEnvironment(currentProject.id, envPendingRename.id, accessToken!, { name: trimmed });
+      onEnvironmentUpdated(updated);
+      setEnvPendingRename(null);
+    } catch (err) {
+      setRenameError((err as Error).message || 'Failed to rename environment.');
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  // --- Delete ---
+  const handleDelete = async () => {
+    if (!envPendingDelete) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteEnvironment(currentProject.id, envPendingDelete.id, accessToken!);
+      onEnvironmentDeleted(envPendingDelete.id);
+      setEnvPendingDelete(null);
+    } catch (err) {
+      setDeleteError((err as Error).message || 'Failed to delete environment.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -102,7 +157,7 @@ export default function EnvironmentsPage() {
       </div>
 
       {!canManageProject && (
-        <p className="env-note">Only owners can create environments for this project.</p>
+        <p className="env-note">Only owners can manage environments for this project.</p>
       )}
 
       {environments.length === 0 ? (
@@ -140,6 +195,27 @@ export default function EnvironmentsPage() {
                     style={{ background: getEnvironmentColor(env.name) }}
                   />
                   <h3 className="env-card-name mono">{env.name}</h3>
+                  {canManageProject && (
+                    <div className="env-card-actions">
+                      <button
+                        className="btn btn-ghost btn-icon-sm"
+                        title="Rename environment"
+                        onClick={() => openRenameModal(env)}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-icon-sm btn-danger-ghost"
+                        title="Delete environment"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setEnvPendingDelete(env);
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="env-card-meta">
@@ -176,26 +252,19 @@ export default function EnvironmentsPage() {
         </div>
       )}
 
+      {/* Create Modal */}
       <Modal
         isOpen={showCreateModal}
         onClose={closeCreateModal}
         title="Create Environment"
         footer={
           <>
-            <button
-              className="btn btn-secondary"
-              onClick={closeCreateModal}
-              disabled={isSubmitting}
-            >
+            <button className="btn btn-secondary" onClick={closeCreateModal} disabled={isCreating}>
               Cancel
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={handleCreateEnvironment}
-              disabled={isSubmitting}
-            >
+            <button className="btn btn-primary" onClick={handleCreate} disabled={isCreating}>
               <Plus size={14} />
-              {isSubmitting ? 'Creating...' : 'Create Environment'}
+              {isCreating ? 'Creating...' : 'Create Environment'}
             </button>
           </>
         }
@@ -206,17 +275,67 @@ export default function EnvironmentsPage() {
             id="environment-name-input"
             className="input mono"
             placeholder="e.g. staging"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            disabled={isSubmitting}
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            disabled={isCreating}
           />
         </div>
-        {error && (
-          <p className="env-form-error" role="alert">
-            {error}
-          </p>
-        )}
+        {createError && <p className="env-form-error" role="alert">{createError}</p>}
       </Modal>
+
+      {/* Rename Modal */}
+      <Modal
+        isOpen={Boolean(envPendingRename)}
+        onClose={closeRenameModal}
+        title="Rename Environment"
+        initialFocusRef={renameInputRef}
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={closeRenameModal} disabled={isRenaming}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={handleRename} disabled={isRenaming}>
+              {isRenaming ? 'Saving...' : 'Save'}
+            </button>
+          </>
+        }
+      >
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label htmlFor="rename-env-input">New Name</label>
+          <input
+            id="rename-env-input"
+            ref={renameInputRef}
+            className="input mono"
+            value={renameName}
+            onChange={(e) => setRenameName(e.target.value)}
+            disabled={isRenaming}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleRename(); }}
+          />
+        </div>
+        {renameError && <p className="env-form-error" role="alert">{renameError}</p>}
+      </Modal>
+
+      {/* Delete Confirm */}
+      <ConfirmDialog
+        isOpen={Boolean(envPendingDelete)}
+        title="Delete Environment"
+        description={
+          envPendingDelete
+            ? `Delete "${envPendingDelete.name}"? All secrets and runtime tokens in this environment will be permanently deleted.`
+            : ''
+        }
+        errorMessage={deleteError}
+        confirmLabel="Delete Environment"
+        onConfirm={() => { void handleDelete(); }}
+        onClose={() => {
+          if (!isDeleting) {
+            setEnvPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+        isBusy={isDeleting}
+        tone="danger"
+      />
     </div>
   );
 }

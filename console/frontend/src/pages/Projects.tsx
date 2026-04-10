@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  CSSProperties,
+  MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Bell, Plus, GitBranch, Users, Clock, TerminalSquare } from 'lucide-react';
+import { Bell, Plus, GitBranch, Users, Clock, TerminalSquare, Search, Star } from 'lucide-react';
 import Modal from '../components/Modal';
 import DashboardLoader from '../components/DashboardLoader';
 import { useAuth } from '../auth/useAuth';
@@ -13,6 +20,15 @@ import {
   rejectInvitation,
 } from '../lib/api';
 import { formatRelativeTime } from '../lib/format';
+import {
+  getProjectDiscoveryState,
+  isProjectPinned,
+  isProjectRecent,
+  markProjectVisited,
+  matchesProjectSearch,
+  sortProjectsForDiscovery,
+  togglePinnedProject,
+} from '../lib/projectDiscovery';
 import { getUserDisplayName } from '../lib/user';
 import type { Project, InvitationSummary, InvitationDetail } from '../types/api';
 import { ApiError } from '../lib/api';
@@ -35,6 +51,24 @@ export default function ProjectsPage() {
   const [inviteModal, setInviteModal] = useState<InvitationDetail | InvitationSummary | null>(null);
   const [inviteActionError, setInviteActionError] = useState<string | null>(null);
   const [inviteActionBusy, setInviteActionBusy] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectSort, setProjectSort] = useState<'recent' | 'name' | 'created'>('recent');
+  const [discoveryState, setDiscoveryState] = useState(() => getProjectDiscoveryState());
+
+  const visibleProjects = useMemo(
+    () =>
+      sortProjectsForDiscovery(
+        projects.filter((project) => matchesProjectSearch(project, projectSearch)),
+        discoveryState,
+        projectSort
+      ),
+    [discoveryState, projectSearch, projectSort, projects]
+  );
+
+  const pinnedProjectCount = useMemo(
+    () => projects.filter((project) => isProjectPinned(project.id, discoveryState)).length,
+    [discoveryState, projects]
+  );
 
   const refreshInvitations = useCallback(async () => {
     if (!accessToken || apiConfigError) {
@@ -229,6 +263,16 @@ export default function ProjectsPage() {
     }
   };
 
+  const handleOpenProject = (projectId: string) => {
+    setDiscoveryState(markProjectVisited(projectId));
+  };
+
+  const handleTogglePinnedProject = (event: ReactMouseEvent<HTMLButtonElement>, projectId: string) => {
+    event.stopPropagation();
+    event.preventDefault();
+    setDiscoveryState(togglePinnedProject(projectId));
+  };
+
   return (
     <div className="projects-page animate-in">
       <div className="projects-hero">
@@ -350,63 +394,124 @@ export default function ProjectsPage() {
           </button>
         </div>
       ) : (
-        <div className="projects-grid stagger-in">
-          {projects.map((project, i) => (
-            <Link
-              key={project.id}
-              to={`/projects/${project.id}/overview`}
-              className="project-card glow-effect"
-              style={{ '--animation-order': i } as React.CSSProperties}
-            >
-              <div className="project-card-header">
-                <div className="project-card-icon-wrapper">
-                  <TerminalSquare size={20} className="project-card-icon-svg" />
-                </div>
-                <div className="project-card-status">
-                  <span className="status-dot healthy"></span>
-                  <span>Active</span>
-                </div>
-              </div>
-
-              <div className="project-card-body">
-                <h3 className="project-card-title">{project.name}</h3>
-                <p className="project-card-desc">{project.description}</p>
-              </div>
-
-              <div className="project-card-footer">
-                <div className="project-card-metrics">
-                  <div className="metric">
-                    <GitBranch size={13} />
-                    <span>{project.environment_count || 0} Envs</span>
-                  </div>
-                  <div className="metric">
-                    <Users size={13} />
-                    <span>{project.member_count || 0} Team</span>
-                  </div>
-                </div>
-                <div className="project-card-activity">
-                  <Clock size={12} />
-                  <span>{formatRelativeTime(project.last_activity_at || project.created_at)}</span>
-                </div>
-              </div>
-            </Link>
-          ))}
-
-          <button
-            type="button"
-            className="project-card card-create glow-effect"
-            style={{ '--animation-order': projects.length } as React.CSSProperties}
-            onClick={openCreateModal}
-          >
-            <div className="card-create-content">
-              <div className="card-create-icon-wrapper">
-                <Plus size={28} />
-              </div>
-              <h3>Create Project</h3>
-              <p>Setup a new secure environment.</p>
+        <>
+          <div className="projects-controls">
+            <div className="projects-search">
+              <Search size={14} className="projects-search-icon" />
+              <input
+                type="text"
+                className="input projects-search-input"
+                placeholder="Search projects..."
+                value={projectSearch}
+                onChange={(event) => setProjectSearch(event.target.value)}
+                aria-label="Search projects"
+              />
             </div>
-          </button>
-        </div>
+            <select
+              className="input select projects-sort-select"
+              value={projectSort}
+              onChange={(event) =>
+                setProjectSort(event.target.value as 'recent' | 'name' | 'created')
+              }
+              aria-label="Sort projects"
+            >
+              <option value="recent">Recent</option>
+              <option value="name">Name</option>
+              <option value="created">Newest first</option>
+            </select>
+            <div className="projects-discovery-meta">
+              <span>
+                {visibleProjects.length} of {projects.length} projects
+              </span>
+              <span>{pinnedProjectCount} pinned</span>
+            </div>
+          </div>
+
+          {visibleProjects.length === 0 ? (
+            <div className="empty-state">
+              <h3>No matching projects</h3>
+              <p>Try a different search term or clear your current filters.</p>
+            </div>
+          ) : (
+            <div className="projects-grid stagger-in">
+              {visibleProjects.map((project, i) => {
+                const isPinned = isProjectPinned(project.id, discoveryState);
+                const isRecent = isProjectRecent(project.id, discoveryState);
+
+                return (
+                  <Link
+                    key={project.id}
+                    to={`/projects/${project.id}/overview`}
+                    className="project-card glow-effect"
+                    style={{ '--animation-order': i } as CSSProperties}
+                    onClick={() => handleOpenProject(project.id)}
+                  >
+                    <div className="project-card-header">
+                      <div className="project-card-icon-wrapper">
+                        <TerminalSquare size={20} className="project-card-icon-svg" />
+                      </div>
+                      <div className="project-card-header-actions">
+                        {isRecent && (
+                          <div className="project-card-status">
+                            <span className="status-dot healthy"></span>
+                            <span>Recent</span>
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          className={`project-pin-btn ${isPinned ? 'active' : ''}`}
+                          aria-label={isPinned ? `Unpin ${project.name}` : `Pin ${project.name}`}
+                          onClick={(event) => handleTogglePinnedProject(event, project.id)}
+                        >
+                          <Star size={14} fill={isPinned ? 'currentColor' : 'none'} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="project-card-body">
+                      <h3 className="project-card-title">{project.name}</h3>
+                      <p className="project-card-desc">
+                        {project.description || 'No description yet.'}
+                      </p>
+                    </div>
+
+                    <div className="project-card-footer">
+                      <div className="project-card-metrics">
+                        <div className="metric">
+                          <GitBranch size={13} />
+                          <span>{project.environment_count || 0} Envs</span>
+                        </div>
+                        <div className="metric">
+                          <Users size={13} />
+                          <span>{project.member_count || 0} Team</span>
+                        </div>
+                      </div>
+                      <div className="project-card-activity">
+                        <Clock size={12} />
+                        <span>{formatRelativeTime(project.last_activity_at || project.created_at)}</span>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+
+              <button
+                type="button"
+                className="project-card card-create glow-effect"
+                style={{ '--animation-order': visibleProjects.length } as CSSProperties}
+                onClick={openCreateModal}
+              >
+                <div className="card-create-content">
+                  <div className="card-create-icon-wrapper">
+                    <Plus size={28} />
+                  </div>
+                  <h3>Create Project</h3>
+                  <p>Setup a new secure environment.</p>
+                </div>
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       <Modal

@@ -31,6 +31,8 @@ export interface Secret {
   environment_id: string;
   environment?: string;
   updated_at: string;
+  expires_at: string | null;
+  updated_by_user_id?: string | null;
   updated_by_email: string | null;
 }
 
@@ -40,12 +42,27 @@ export interface RevealedSecret {
   version: number;
   environment_id: string;
   updated_at: string;
+  expires_at: string | null;
   updated_by_email: string | null;
   revealed_at: string;
 }
 
 export interface SecretListResponse {
+  project_id: string;
+  environment_id: string;
   secrets: Secret[];
+  generated_at: string;
+}
+
+export interface ProjectSecret extends Secret {
+  environment_name: string;
+}
+
+export interface ProjectSecretListResponse {
+  project_id: string;
+  secrets: ProjectSecret[];
+  next_cursor: string | null;
+  generated_at: string;
 }
 
 export interface PushSecretsResponse {
@@ -184,7 +201,37 @@ export interface ApiErrorDetails {
     code?: string;
     shared_tokens?: Array<{ id: string; name: string }>;
     revealed_shared_tokens?: Array<{ id: string; name: string }>;
+    members?: Array<{
+      email: string;
+      shared_tokens: Array<{ id: string; name: string }>;
+      revealed_shared_tokens: Array<{ id: string; name: string }>;
+    }>;
   };
+}
+
+export interface Webhook {
+  id: string;
+  project_id: string;
+  url: string;
+  events: string[];
+  signing_secret: string;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  latest_delivery: WebhookDelivery | null;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  webhook_id: string;
+  event: string;
+  delivery_type: string;
+  status: 'success' | 'http_error' | 'network_error' | string;
+  response_status: number | null;
+  error_message: string | null;
+  triggered_by: string | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 // Request options

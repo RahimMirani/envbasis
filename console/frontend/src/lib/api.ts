@@ -5,6 +5,7 @@ import type {
   Secret,
   RevealedSecret,
   SecretListResponse,
+  ProjectSecretListResponse,
   PushSecretsResponse,
   PullSecretsResponse,
   Member,
@@ -17,6 +18,8 @@ import type {
   AuditLog,
   UnifiedAuditLogListResponse,
   SecretStats,
+  Webhook,
+  WebhookDelivery,
   CliAuthRequest,
   RequestOptions,
   ApiErrorDetails,
@@ -37,6 +40,19 @@ export class ApiError extends Error {
     this.code = code ?? null;
     this.details = details ?? null;
   }
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const candidate = error as { name?: string; message?: string };
+  if (candidate.name === 'AbortError') {
+    return true;
+  }
+
+  return typeof candidate.message === 'string' && candidate.message.includes('signal is aborted');
 }
 
 function encodePathSegment(value: string | number): string {
@@ -224,20 +240,76 @@ export function createEnvironment(
   });
 }
 
+export function renameEnvironment(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  body: { name: string },
+  options: RequestOptions = {}
+): Promise<Environment> {
+  return apiRequest<Environment>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}`,
+    { ...options, method: 'PATCH', accessToken, body }
+  );
+}
+
+export function deleteEnvironment(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}`,
+    { ...options, method: 'DELETE', accessToken }
+  );
+}
+
 // Secrets
 
 export function listSecrets(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  options: RequestOptions = {}
+  options: RequestOptions & { key?: string } = {}
 ): Promise<SecretListResponse> {
+  const { key, ...rest } = options;
+  const params = key ? `?key=${encodeURIComponent(key)}` : '';
   return apiRequest<SecretListResponse>(
-    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets`,
-    {
-      ...options,
-      accessToken,
-    }
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets${params}`,
+    { ...rest, accessToken }
+  );
+}
+
+export function listProjectSecrets(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions & {
+    key?: string;
+    environmentIds?: string[];
+    limit?: number;
+    cursor?: string | null;
+  } = {}
+): Promise<ProjectSecretListResponse> {
+  const { key, environmentIds, limit, cursor, ...rest } = options;
+  const params = new URLSearchParams();
+
+  if (key) {
+    params.set('key', key);
+  }
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+  environmentIds?.forEach((environmentId) => {
+    params.append('environment_id', environmentId);
+  });
+
+  return apiRequest<ProjectSecretListResponse>(
+    `/projects/${encodePathSegment(projectId)}/secrets${params.size ? `?${params.toString()}` : ''}`,
+    { ...rest, accessToken }
   );
 }
 
@@ -261,7 +333,7 @@ export function createSecret(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  body: { key: string; value: string },
+  body: { key: string; value: string; expires_at?: string | null },
   options: RequestOptions = {}
 ): Promise<Secret> {
   return apiRequest<Secret>(
@@ -280,7 +352,7 @@ export function updateSecret(
   environmentId: string,
   secretKey: string,
   accessToken: string,
-  body: { value: string },
+  body: { value: string; expires_at?: string | null },
   options: RequestOptions = {}
 ): Promise<Secret> {
   return apiRequest<Secret>(
@@ -309,6 +381,20 @@ export function deleteSecret(
       accessToken,
     }
   );
+}
+
+export function bulkDeleteSecrets(
+  projectId: string,
+  accessToken: string,
+  body: { items: Array<{ environment_id: string; key: string }> },
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(`/projects/${encodePathSegment(projectId)}/secrets/bulk-delete`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
 }
 
 export function getProjectSecretStats(
@@ -488,6 +574,20 @@ export function revokeMember(
   });
 }
 
+export function bulkRevokeMembers(
+  projectId: string,
+  accessToken: string,
+  body: { emails: string[]; shared_token_action?: string },
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(`/projects/${encodePathSegment(projectId)}/members/bulk-revoke`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
+}
+
 // Runtime Tokens
 
 export function listRuntimeTokens(
@@ -610,6 +710,119 @@ export function listUnifiedAuditLogs(
     ...options,
     accessToken,
   });
+}
+
+export async function downloadAuditLogs(
+  projectId: string,
+  accessToken: string,
+  format: 'json' | 'csv' = 'csv'
+): Promise<void> {
+  const base = readApiBaseUrl() ?? '';
+  const response = await fetch(
+    `${base}/projects/${encodePathSegment(projectId)}/audit-logs/export?format=${format}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!response.ok) {
+    throw new ApiError(`Export failed with status ${response.status}.`, { status: response.status });
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const match = /filename="([^"]+)"/.exec(disposition);
+  a.href = url;
+  a.download = match ? match[1] : `audit-logs.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Webhooks
+
+export function listWebhooks(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<Webhook[]> {
+  return apiRequest<Webhook[]>(`/projects/${encodePathSegment(projectId)}/webhooks`, {
+    ...options,
+    accessToken,
+  });
+}
+
+export function createWebhook(
+  projectId: string,
+  accessToken: string,
+  body: { url: string; events: string[] },
+  options: RequestOptions = {}
+): Promise<Webhook> {
+  return apiRequest<Webhook>(`/projects/${encodePathSegment(projectId)}/webhooks`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
+}
+
+export function deleteWebhook(
+  projectId: string,
+  webhookId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(
+    `/projects/${encodePathSegment(projectId)}/webhooks/${encodePathSegment(webhookId)}`,
+    { ...options, method: 'DELETE', accessToken }
+  );
+}
+
+export function listWebhookEvents(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<string[]> {
+  return apiRequest<string[]>(`/projects/${encodePathSegment(projectId)}/webhooks/events`, {
+    ...options,
+    accessToken,
+  });
+}
+
+export function listWebhookDeliveries(
+  projectId: string,
+  webhookId: string,
+  accessToken: string,
+  options: RequestOptions & { limit?: number } = {}
+): Promise<WebhookDelivery[]> {
+  const { limit, ...rest } = options;
+  const params = new URLSearchParams();
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+
+  return apiRequest<WebhookDelivery[]>(
+    `/projects/${encodePathSegment(projectId)}/webhooks/${encodePathSegment(webhookId)}/deliveries${params.size ? `?${params.toString()}` : ''}`,
+    {
+      ...rest,
+      accessToken,
+    }
+  );
+}
+
+export function sendTestWebhook(
+  projectId: string,
+  webhookId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<WebhookDelivery> {
+  return apiRequest<WebhookDelivery>(
+    `/projects/${encodePathSegment(projectId)}/webhooks/${encodePathSegment(webhookId)}/test`,
+    {
+      ...options,
+      method: 'POST',
+      accessToken,
+    }
+  );
 }
 
 // CLI Auth
