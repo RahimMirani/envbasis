@@ -15,7 +15,7 @@ import {
   revokeProjectInvitation,
   updateMemberSecretAccess,
 } from '../lib/api';
-import { formatDate } from '../lib/format';
+import { formatDate, formatRelativeTime } from '../lib/format';
 import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
 import type { Project, Member, ApiErrorDetails, ProjectInvitation } from '../types/api';
@@ -74,6 +74,49 @@ function formatInviteError(error: ApiError | Error | null): string {
   return error.message || 'Failed to invite member.';
 }
 
+function getInviteCooldownMs(cooldownUntil: string | null, nowMs: number): number {
+  if (!cooldownUntil) {
+    return 0;
+  }
+
+  return Math.max(0, new Date(cooldownUntil).getTime() - nowMs);
+}
+
+function formatDuration(ms: number): string {
+  const totalMinutes = Math.ceil(ms / 60000);
+  if (totalMinutes <= 1) {
+    return 'under 1 minute';
+  }
+
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    if (hours > 0) {
+      return `${days}d ${hours}h`;
+    }
+    return `${days}d`;
+  }
+
+  if (hours > 0) {
+    if (minutes > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${hours}h`;
+  }
+
+  return `${minutes}m`;
+}
+
+function formatInviteLastSent(lastSentAt: string | null): string {
+  if (!lastSentAt) {
+    return 'Not sent yet';
+  }
+
+  return formatRelativeTime(lastSentAt);
+}
+
 export default function TeamPage() {
   const { currentProject, canManageProject, onMemberCountChanged, pageCache } =
     useOutletContext<OutletContextType>();
@@ -93,12 +136,14 @@ export default function TeamPage() {
   const [keepActiveConfirm, setKeepActiveConfirm] = useState(false);
   const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>(() => cachedTeam?.pendingInvites ?? []);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
+  const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
   const [selectedInviteIds, setSelectedInviteIds] = useState<string[]>([]);
   const [isBulkRevokingInvites, setIsBulkRevokingInvites] = useState(false);
   const [showBulkRevokeInvitesConfirm, setShowBulkRevokeInvitesConfirm] = useState(false);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [bulkMembersPendingRevoke, setBulkMembersPendingRevoke] = useState<Member[]>([]);
   const [isBulkRevoking, setIsBulkRevoking] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     if (!accessToken) {
@@ -187,6 +232,22 @@ export default function TeamPage() {
     setSelectedInviteIds((current) =>
       current.filter((id) => pendingInvites.some((inv) => inv.id === id))
     );
+  }, [pendingInvites]);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    const hasActiveCooldown = pendingInvites.some((inv) => getInviteCooldownMs(inv.cooldown_until, Date.now()) > 0);
+    if (!hasActiveCooldown) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 60000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
   }, [pendingInvites]);
 
   const selectedMembers = members.filter((member) => selectedMemberIds.includes(member.user_id));
@@ -281,6 +342,36 @@ export default function TeamPage() {
       setError((revErr as Error).message || 'Failed to revoke invitation.');
     } finally {
       setRevokingInviteId(null);
+    }
+  };
+
+  const handleResendPendingInvite = async (invitation: ProjectInvitation) => {
+    if (!accessToken) {
+      return;
+    }
+
+    setResendingInviteId(invitation.id);
+    setError(null);
+
+    try {
+      const result = await inviteMember(currentProject.id, accessToken, {
+        email: invitation.email,
+        role: 'member',
+        can_push_pull_secrets: invitation.can_push_pull_secrets,
+      });
+
+      setPendingInvites((current) => {
+        const others = current.filter((pendingInvite) => pendingInvite.id !== result.invitation.id);
+        return [result.invitation, ...others];
+      });
+
+      if (!result.email_sent && result.message) {
+        setError(result.message);
+      }
+    } catch (resendErrorValue) {
+      setError(formatInviteError(resendErrorValue as ApiError));
+    } finally {
+      setResendingInviteId(null);
     }
   };
 
@@ -477,49 +568,78 @@ export default function TeamPage() {
                   </th>
                   <th>Recipient</th>
                   <th>Secrets access</th>
+                  <th>Delivery</th>
                   <th>Expires</th>
-                  <th>Emails sent</th>
-                  <th style={{ width: 100 }}>Action</th>
+                  <th style={{ width: 180 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {pendingInvites.map((inv) => (
-                  <tr key={inv.id}>
-                    <td className="table-checkbox-cell">
-                      <Checkbox
-                        checked={selectedInviteIds.includes(inv.id)}
-                        onChange={() => toggleInviteSelection(inv.id)}
-                        aria-label={`Select invitation for ${inv.email}`}
-                        disabled={isBulkRevokingInvites || revokingInviteId === inv.id}
-                      />
-                    </td>
-                    <td className="mono">{inv.email}</td>
-                    <td>
-                      <span className={`badge ${inv.can_push_pull_secrets ? 'badge-success' : 'badge-neutral'}`}>
-                        {inv.can_push_pull_secrets ? 'Yes' : 'No'}
-                      </span>
-                    </td>
-                    <td className="text-secondary">{formatDate(inv.expires_at)}</td>
-                    <td className="text-secondary">{inv.send_count}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm btn-danger-subtle"
-                        onClick={() => handleRevokePendingInvite(inv)}
-                        disabled={revokingInviteId === inv.id || isBulkRevokingInvites}
-                      >
-                        Revoke
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {pendingInvites.map((inv) => {
+                  const cooldownMs = getInviteCooldownMs(inv.cooldown_until, nowMs);
+                  const cooldownActive = cooldownMs > 0;
+                  const isBusy =
+                    revokingInviteId === inv.id || resendingInviteId === inv.id || isBulkRevokingInvites;
+
+                  return (
+                    <tr key={inv.id}>
+                      <td className="table-checkbox-cell">
+                        <Checkbox
+                          checked={selectedInviteIds.includes(inv.id)}
+                          onChange={() => toggleInviteSelection(inv.id)}
+                          aria-label={`Select invitation for ${inv.email}`}
+                          disabled={isBusy}
+                        />
+                      </td>
+                      <td className="mono">{inv.email}</td>
+                      <td>
+                        <span className={`badge ${inv.can_push_pull_secrets ? 'badge-success' : 'badge-neutral'}`}>
+                          {inv.can_push_pull_secrets ? 'Yes' : 'No'}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="team-invite-delivery">
+                          <span className="team-invite-meta">
+                            Sent {inv.send_count} email{inv.send_count === 1 ? '' : 's'}
+                          </span>
+                          <span className="team-invite-meta">
+                            Last sent {formatInviteLastSent(inv.last_sent_at)}
+                          </span>
+                          <span className={cooldownActive ? 'team-invite-cooldown' : 'team-invite-meta'}>
+                            {cooldownActive ? `Resend in ${formatDuration(cooldownMs)}` : 'Ready to resend'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="text-secondary">{formatDate(inv.expires_at)}</td>
+                      <td>
+                        <div className="team-invite-actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => handleResendPendingInvite(inv)}
+                            disabled={isBusy || cooldownActive}
+                          >
+                            {resendingInviteId === inv.id ? 'Sending...' : 'Resend'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm btn-danger-subtle"
+                            onClick={() => handleRevokePendingInvite(inv)}
+                            disabled={isBusy}
+                          >
+                            {revokingInviteId === inv.id ? 'Revoking...' : 'Revoke'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {pendingInvites.some((p) => p.cooldown_until) && (
+          {pendingInvites.some((p) => getInviteCooldownMs(p.cooldown_until, nowMs) > 0) && (
             <p className="pending-invites-note">
-              After two invite emails to the same address, this project must wait 5 days before
-              sending more.
+              After two invite emails to the same address, resend pauses for 5 days. The delivery
+              column shows the remaining cooldown and the last time an invite email was sent.
             </p>
           )}
         </div>
