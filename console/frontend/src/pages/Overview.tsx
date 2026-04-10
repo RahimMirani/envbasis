@@ -19,7 +19,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import CodeBlock from '../components/CodeBlock';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs, listProjectInvitations } from '../lib/api';
 import {
@@ -29,6 +29,7 @@ import {
   getAuditIconKey,
 } from '../lib/audit';
 import { formatRelativeTime } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getUserDisplayName } from '../lib/user';
 import type { Project, Environment, AuditLog, SecretStats } from '../types/api';
 
@@ -40,6 +41,12 @@ interface OutletContextType {
   canManageProject: boolean;
   secretStats: SecretStats | null;
   isSecretStatsLoading: boolean;
+  pageCache: ProjectPageCacheApi;
+}
+
+interface OverviewCacheEntry {
+  activityLogs: AuditLog[];
+  pendingInviteCount: number;
 }
 
 const activityIcons: Record<string, LucideIcon> = {
@@ -62,12 +69,15 @@ export default function OverviewPage() {
     canManageProject,
     secretStats,
     isSecretStatsLoading,
+    pageCache,
   } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
   const navigate = useNavigate();
-  const [activityLogs, setActivityLogs] = useState<AuditLog[]>([]);
-  const [pendingInviteCount, setPendingInviteCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const overviewCacheKey = `overview:${currentProject.id}`;
+  const cachedOverview = pageCache.get<OverviewCacheEntry>(overviewCacheKey);
+  const [activityLogs, setActivityLogs] = useState<AuditLog[]>(() => cachedOverview?.activityLogs ?? []);
+  const [pendingInviteCount, setPendingInviteCount] = useState(() => cachedOverview?.pendingInviteCount ?? 0);
+  const [isLoading, setIsLoading] = useState(() => !cachedOverview);
 
   const totalSecretCount = secretStats?.total_secret_count;
 
@@ -81,7 +91,9 @@ export default function OverviewPage() {
     const controller = new AbortController();
 
     async function loadOverviewData() {
-      setIsLoading(true);
+      if (!cachedOverview) {
+        setIsLoading(true);
+      }
 
       try {
         if (currentProject.role === 'owner') {
@@ -98,10 +110,18 @@ export default function OverviewPage() {
           if (isActive) {
             setActivityLogs(logs);
             setPendingInviteCount(invites.length);
+            pageCache.set<OverviewCacheEntry>(overviewCacheKey, {
+              activityLogs: logs,
+              pendingInviteCount: invites.length,
+            });
           }
         } else if (isActive) {
           setActivityLogs([]);
           setPendingInviteCount(0);
+          pageCache.set<OverviewCacheEntry>(overviewCacheKey, {
+            activityLogs: [],
+            pendingInviteCount: 0,
+          });
         }
       } catch {
         if (isActive) {
@@ -121,7 +141,7 @@ export default function OverviewPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, currentProject.role]);
+  }, [accessToken, apiConfigError, cachedOverview, currentProject.id, currentProject.role, overviewCacheKey, pageCache]);
 
   const stats = [
     {
@@ -246,11 +266,7 @@ export default function OverviewPage() {
             </div>
             <div className="card">
               {isLoading ? (
-                <DashboardLoader
-                  compact
-                  title="Loading activity"
-                  description="Fetching recent project actions."
-                />
+                <SectionLoader label="Loading activity" />
               ) : activityLogs.length === 0 ? (
                 <div className="empty-state">
                   <h3>No activity yet</h3>
