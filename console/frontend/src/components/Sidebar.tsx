@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
@@ -24,6 +24,7 @@ import {
   Star,
 } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
+import OwnerOnlyHint from './OwnerOnlyHint';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
 import {
   getProjectDiscoveryState,
@@ -62,6 +63,7 @@ export default function Sidebar({
   projects,
 }: SidebarProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { currentUser, authUser, signOut } = useAuth();
   const user = currentUser ?? authUser;
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
@@ -75,9 +77,9 @@ export default function Sidebar({
     { to: `${basePath}/environments`, icon: GitBranch, label: 'Environments' },
     { to: `${basePath}/team`, icon: Users, label: 'Team' },
     { to: `${basePath}/tokens`, icon: Ticket, label: 'Runtime Tokens' },
-    { to: `${basePath}/audit`, icon: ScrollText, label: 'Audit Logs' },
-    { to: `${basePath}/webhooks`, icon: Webhook, label: 'Webhooks' },
-    { to: `${basePath}/settings`, icon: Settings, label: 'Settings' },
+    { to: `${basePath}/audit`, icon: ScrollText, label: 'Audit Logs', ownerOnly: true },
+    { to: `${basePath}/webhooks`, icon: Webhook, label: 'Webhooks', ownerOnly: true },
+    { to: `${basePath}/settings`, icon: Settings, label: 'Settings', ownerOnly: true },
   ];
 
   const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
@@ -243,16 +245,47 @@ export default function Sidebar({
       </div>
 
       <nav className="sidebar-nav">
-        {links.map((link) => (
-          <NavLink
-            key={link.to}
-            to={link.to}
-            className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
-          >
-            <link.icon size={16} className="sidebar-link-icon" />
-            <span>{link.label}</span>
-          </NavLink>
-        ))}
+        {links.map((link) => {
+          const isLocked = Boolean(link.ownerOnly) && projectRole !== 'owner';
+
+          if (isLocked) {
+            return (
+              <OwnerOnlyHint
+                key={link.to}
+                message={`${link.label} is available to project owners only.`}
+                className="sidebar-owner-only-hint"
+              >
+                <button
+                  type="button"
+                  className={`sidebar-link sidebar-link-locked ${
+                    location.pathname === link.to ? 'sidebar-link-active' : ''
+                  }`}
+                  aria-disabled="true"
+                  tabIndex={-1}
+                >
+                  <span className="sidebar-link-content">
+                    <link.icon size={16} className="sidebar-link-icon" />
+                    <span>{link.label}</span>
+                  </span>
+                  <span className="owner-only-chip owner-only-chip-sidebar">Owner only</span>
+                </button>
+              </OwnerOnlyHint>
+            );
+          }
+
+          return (
+            <NavLink
+              key={link.to}
+              to={link.to}
+              className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
+            >
+              <span className="sidebar-link-content">
+                <link.icon size={16} className="sidebar-link-icon" />
+                <span>{link.label}</span>
+              </span>
+            </NavLink>
+          );
+        })}
       </nav>
 
       <div className="sidebar-bottom">
