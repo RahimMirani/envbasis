@@ -1,13 +1,12 @@
 import {
   CSSProperties,
-  KeyboardEvent,
   MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useMemo,
   useState,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Bell, Plus, GitBranch, Users, Clock, TerminalSquare, Search, Star } from 'lucide-react';
 import Modal from '../components/Modal';
 import DashboardLoader from '../components/DashboardLoader';
@@ -266,20 +265,11 @@ export default function ProjectsPage() {
 
   const handleOpenProject = (projectId: string) => {
     setDiscoveryState(markProjectVisited(projectId));
-    navigate(`/projects/${projectId}/overview`);
-  };
-
-  const handleProjectCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, projectId: string) => {
-    if (event.key !== 'Enter' && event.key !== ' ') {
-      return;
-    }
-
-    event.preventDefault();
-    handleOpenProject(projectId);
   };
 
   const handleTogglePinnedProject = (event: ReactMouseEvent<HTMLButtonElement>, projectId: string) => {
     event.stopPropagation();
+    event.preventDefault();
     setDiscoveryState(togglePinnedProject(projectId));
   };
 
@@ -449,14 +439,12 @@ export default function ProjectsPage() {
                 const isRecent = isProjectRecent(project.id, discoveryState);
 
                 return (
-                  <div
+                  <Link
                     key={project.id}
+                    to={`/projects/${project.id}/overview`}
                     className="project-card glow-effect"
                     style={{ '--animation-order': i } as CSSProperties}
-                    role="link"
-                    tabIndex={0}
                     onClick={() => handleOpenProject(project.id)}
-                    onKeyDown={(event) => handleProjectCardKeyDown(event, project.id)}
                   >
                     <div className="project-card-header">
                       <div className="project-card-icon-wrapper">
@@ -503,7 +491,7 @@ export default function ProjectsPage() {
                         <span>{formatRelativeTime(project.last_activity_at || project.created_at)}</span>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 );
               })}
 
