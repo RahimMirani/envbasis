@@ -53,6 +53,18 @@ class SecretListResponse(BaseModel):
     generated_at: datetime
 
 
+class ProjectSecretItemRead(SecretItemRead):
+    environment_id: uuid.UUID
+    environment_name: str
+
+
+class ProjectSecretListResponse(BaseModel):
+    project_id: uuid.UUID
+    secrets: list[ProjectSecretItemRead]
+    next_cursor: str | None = None
+    generated_at: datetime
+
+
 class EnvironmentSecretStatsRead(BaseModel):
     environment_id: uuid.UUID
     environment_name: str
