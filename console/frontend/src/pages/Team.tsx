@@ -3,7 +3,7 @@ import { Shield, UserPlus, UserX } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
@@ -16,6 +16,7 @@ import {
   updateMemberSecretAccess,
 } from '../lib/api';
 import { formatDate } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
 import type { Project, Member, ApiErrorDetails, ProjectInvitation } from '../types/api';
 import { ApiError } from '../lib/api';
@@ -24,6 +25,12 @@ interface OutletContextType {
   currentProject: Project;
   canManageProject: boolean;
   onMemberCountChanged: (delta: number) => void;
+  pageCache: ProjectPageCacheApi;
+}
+
+interface TeamCacheEntry {
+  members: Member[];
+  pendingInvites: ProjectInvitation[];
 }
 
 interface RevokeConflict {
@@ -68,11 +75,13 @@ function formatInviteError(error: ApiError | Error | null): string {
 }
 
 export default function TeamPage() {
-  const { currentProject, canManageProject, onMemberCountChanged } =
+  const { currentProject, canManageProject, onMemberCountChanged, pageCache } =
     useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
-  const [members, setMembers] = useState<Member[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const teamCacheKey = `team:${currentProject.id}`;
+  const cachedTeam = pageCache.get<TeamCacheEntry>(teamCacheKey);
+  const [members, setMembers] = useState<Member[]>(() => cachedTeam?.members ?? []);
+  const [isLoading, setIsLoading] = useState(() => !cachedTeam);
   const [error, setError] = useState<string | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -82,7 +91,7 @@ export default function TeamPage() {
   const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
   const [revokeConflict, setRevokeConflict] = useState<RevokeConflict | null>(null);
   const [keepActiveConfirm, setKeepActiveConfirm] = useState(false);
-  const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>(() => cachedTeam?.pendingInvites ?? []);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
   const [selectedInviteIds, setSelectedInviteIds] = useState<string[]>([]);
   const [isBulkRevokingInvites, setIsBulkRevokingInvites] = useState(false);
@@ -106,7 +115,9 @@ export default function TeamPage() {
     const controller = new AbortController();
 
     async function loadMembers() {
-      setIsLoading(true);
+      if (!cachedTeam) {
+        setIsLoading(true);
+      }
       setError(null);
 
       try {
@@ -127,6 +138,10 @@ export default function TeamPage() {
 
         setMembers(response);
         setPendingInvites(invites);
+        pageCache.set<TeamCacheEntry>(teamCacheKey, {
+          members: response,
+          pendingInvites: invites,
+        });
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -148,7 +163,16 @@ export default function TeamPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id, canManageProject]);
+  }, [accessToken, apiConfigError, cachedTeam, canManageProject, currentProject.id, pageCache, teamCacheKey]);
+
+  useEffect(() => {
+    if (!isLoading && !error) {
+      pageCache.set<TeamCacheEntry>(teamCacheKey, {
+        members,
+        pendingInvites,
+      });
+    }
+  }, [error, isLoading, members, pageCache, pendingInvites, teamCacheKey]);
 
   useEffect(() => {
     setSelectedMemberIds((current) =>
@@ -499,7 +523,7 @@ export default function TeamPage() {
       )}
 
       {isLoading ? (
-        <DashboardLoader compact title="Loading team" description="Fetching project members." />
+        <SectionLoader label="Loading team" />
       ) : members.length === 0 ? (
         <div className="empty-state">
           <h3>No members yet</h3>
