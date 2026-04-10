@@ -359,6 +359,7 @@ tbody tr:last-child td { border-bottom: none; }
   border-top: 1px solid var(--border-light); background: var(--bg-sidebar);
   border-bottom-left-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-lg);
 }
+.confirm-dialog-error { margin-top: var(--space-4); font-size: 13px; color: var(--danger); }
 
 /* Empty State */
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--space-12) var(--space-8); text-align: center; }
@@ -1179,6 +1180,8 @@ tbody tr:last-child td { border-bottom: none; }
               border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
               box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 4px 24px -6px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
+  color: inherit;
+  text-decoration: none;
 }
 .glow-effect::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent); opacity: 0.3; transition: opacity 0.3s ease; }
 .glow-effect:hover::before { opacity: 1; }
