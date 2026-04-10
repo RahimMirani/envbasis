@@ -5,6 +5,7 @@ import type {
   Secret,
   RevealedSecret,
   SecretListResponse,
+  ProjectSecretListResponse,
   PushSecretsResponse,
   PullSecretsResponse,
   Member,
@@ -18,6 +19,7 @@ import type {
   UnifiedAuditLogListResponse,
   SecretStats,
   Webhook,
+  WebhookDelivery,
   CliAuthRequest,
   RequestOptions,
   ApiErrorDetails,
@@ -38,6 +40,19 @@ export class ApiError extends Error {
     this.code = code ?? null;
     this.details = details ?? null;
   }
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const candidate = error as { name?: string; message?: string };
+  if (candidate.name === 'AbortError') {
+    return true;
+  }
+
+  return typeof candidate.message === 'string' && candidate.message.includes('signal is aborted');
 }
 
 function encodePathSegment(value: string | number): string {
@@ -262,6 +277,38 @@ export function listSecrets(
   const params = key ? `?key=${encodeURIComponent(key)}` : '';
   return apiRequest<SecretListResponse>(
     `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets${params}`,
+    { ...rest, accessToken }
+  );
+}
+
+export function listProjectSecrets(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions & {
+    key?: string;
+    environmentIds?: string[];
+    limit?: number;
+    cursor?: string | null;
+  } = {}
+): Promise<ProjectSecretListResponse> {
+  const { key, environmentIds, limit, cursor, ...rest } = options;
+  const params = new URLSearchParams();
+
+  if (key) {
+    params.set('key', key);
+  }
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+  environmentIds?.forEach((environmentId) => {
+    params.append('environment_id', environmentId);
+  });
+
+  return apiRequest<ProjectSecretListResponse>(
+    `/projects/${encodePathSegment(projectId)}/secrets${params.size ? `?${params.toString()}` : ''}`,
     { ...rest, accessToken }
   );
 }
@@ -739,6 +786,43 @@ export function listWebhookEvents(
     ...options,
     accessToken,
   });
+}
+
+export function listWebhookDeliveries(
+  projectId: string,
+  webhookId: string,
+  accessToken: string,
+  options: RequestOptions & { limit?: number } = {}
+): Promise<WebhookDelivery[]> {
+  const { limit, ...rest } = options;
+  const params = new URLSearchParams();
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+
+  return apiRequest<WebhookDelivery[]>(
+    `/projects/${encodePathSegment(projectId)}/webhooks/${encodePathSegment(webhookId)}/deliveries${params.size ? `?${params.toString()}` : ''}`,
+    {
+      ...rest,
+      accessToken,
+    }
+  );
+}
+
+export function sendTestWebhook(
+  projectId: string,
+  webhookId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<WebhookDelivery> {
+  return apiRequest<WebhookDelivery>(
+    `/projects/${encodePathSegment(projectId)}/webhooks/${encodePathSegment(webhookId)}/test`,
+    {
+      ...options,
+      method: 'POST',
+      accessToken,
+    }
+  );
 }
 
 // CLI Auth
