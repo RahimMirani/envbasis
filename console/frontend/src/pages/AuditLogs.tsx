@@ -115,9 +115,12 @@ export default function AuditLogsPage() {
     const controller = new AbortController();
 
     async function loadAuditLogs() {
-      if (!cachedLogs) {
-        setIsLoading(true);
+      if (cachedLogs) {
+        setIsLoading(false);
+        return;
       }
+
+      setIsLoading(true);
       setError(null);
       try {
         const response = await listAuditLogs(currentProject.id, accessToken!, {
