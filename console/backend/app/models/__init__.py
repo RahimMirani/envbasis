@@ -11,6 +11,7 @@ from app.models.runtime_token_share import RuntimeTokenShare
 from app.models.secret import Secret
 from app.models.user import User
 from app.models.webhook import Webhook
+from app.models.webhook_delivery import WebhookDelivery
 
 __all__ = [
     "AuditLog",
@@ -26,4 +27,5 @@ __all__ = [
     "Secret",
     "User",
     "Webhook",
+    "WebhookDelivery",
 ]
