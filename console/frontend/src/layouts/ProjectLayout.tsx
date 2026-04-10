@@ -9,12 +9,6 @@ import {
   listEnvironments,
   getProjectSecretStats,
   listProjects,
-  listMembers,
-  listProjectInvitations,
-  listWebhooks,
-  listWebhookEvents,
-  listRuntimeTokens,
-  listAuditLogs,
 } from '../lib/api';
 import { createProjectPageCache } from '../lib/projectPageCache';
 import { markProjectVisited } from '../lib/projectDiscovery';
@@ -156,70 +150,6 @@ export default function ProjectLayout() {
 
     markProjectVisited(currentProject.id);
   }, [currentProject?.id]);
-
-  // Prefetch all section data into cache as soon as the project loads,
-  // so navigating between sections is instant on first visit.
-  useEffect(() => {
-    if (!accessToken || !currentProject?.id || apiConfigError) {
-      return undefined;
-    }
-
-    const id = currentProject.id;
-    const isOwner = currentProject.role === 'owner';
-    const cache = pageCacheRef.current;
-    const controller = new AbortController();
-    const { signal } = controller;
-
-    const membersPromise = listMembers(id, accessToken, { signal });
-
-    void Promise.allSettled([
-      // Team
-      Promise.all([
-        membersPromise,
-        isOwner
-          ? listProjectInvitations(id, accessToken, { signal })
-          : Promise.resolve([]),
-      ]).then(([members, pendingInvites]) => {
-        if (!cache.get(`team:${id}`)) {
-          cache.set(`team:${id}`, { members, pendingInvites });
-        }
-      }),
-
-      // Webhooks (owners only)
-      isOwner
-        ? Promise.all([
-            listWebhooks(id, accessToken, { signal }),
-            listWebhookEvents(id, accessToken, { signal }),
-          ]).then(([webhooks, supportedEvents]) => {
-            if (!cache.get(`webhooks:${id}`)) {
-              cache.set(`webhooks:${id}`, { webhooks, supportedEvents });
-            }
-          })
-        : Promise.resolve(),
-
-      // Tokens
-      Promise.all([
-        listRuntimeTokens(id, accessToken, { signal }),
-        membersPromise,
-      ]).then(([tokens, members]) => {
-        if (!cache.get(`tokens:${id}`)) {
-          cache.set(`tokens:${id}`, {
-            tokens,
-            membersById: Object.fromEntries(members.map((m) => [m.id, m])),
-          });
-        }
-      }),
-
-      // Audit logs
-      listAuditLogs(id, accessToken, { limit: 500, signal }).then((logs) => {
-        if (!cache.get(`audit:${id}`)) {
-          cache.set(`audit:${id}`, logs);
-        }
-      }),
-    ]);
-
-    return () => controller.abort();
-  }, [accessToken, apiConfigError, currentProject?.id, currentProject?.role]);
 
   const refreshSecretStats = useCallback(async () => {
     if (!accessToken || !projectId) {
