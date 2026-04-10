@@ -11,7 +11,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
 import { listUnifiedAuditLogs, listProjects } from '../lib/api';
 import {
@@ -218,11 +218,7 @@ export default function GlobalAuditLogsPage() {
       )}
 
       {isLoading ? (
-        <DashboardLoader
-          compact
-          title="Loading audit logs"
-          description={selectedProject ? `Fetching ${selectedProject.name} activity.` : 'Fetching activity across all projects.'}
-        />
+        <SectionLoader label="Loading audit logs" />
       ) : logs.length === 0 ? (
         <div className="empty-state">
           <h3>No audit events yet</h3>
