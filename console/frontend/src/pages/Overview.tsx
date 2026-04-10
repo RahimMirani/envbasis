@@ -19,6 +19,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import CodeBlock from '../components/CodeBlock';
+import OwnerOnlyHint from '../components/OwnerOnlyHint';
 import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs, listProjectInvitations } from '../lib/api';
@@ -212,24 +213,40 @@ export default function OverviewPage() {
           </p>
         </div>
         <div className="overview-hero-actions">
-          <button
-            className="btn btn-secondary"
-            onClick={() => navigate(`${projectBasePath}/tokens`)}
-            id="quick-create-token"
-            disabled={!canManageProject}
-          >
-            <Ticket size={14} />
-            Create Token
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={() => navigate(`${projectBasePath}/team`)}
-            id="quick-invite"
-            disabled={!canManageProject}
-          >
-            <UserPlus size={14} />
-            Invite
-          </button>
+          {canManageProject ? (
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate(`${projectBasePath}/tokens`)}
+              id="quick-create-token"
+            >
+              <Ticket size={14} />
+              Create Token
+            </button>
+          ) : (
+            <OwnerOnlyHint message="Only project owners can create runtime tokens.">
+              <button className="btn btn-secondary" id="quick-create-token" disabled>
+                <Ticket size={14} />
+                Create Token
+              </button>
+            </OwnerOnlyHint>
+          )}
+          {canManageProject ? (
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate(`${projectBasePath}/team`)}
+              id="quick-invite"
+            >
+              <UserPlus size={14} />
+              Invite
+            </button>
+          ) : (
+            <OwnerOnlyHint message="Only project owners can invite teammates to this project.">
+              <button className="btn btn-secondary" id="quick-invite" disabled>
+                <UserPlus size={14} />
+                Invite
+              </button>
+            </OwnerOnlyHint>
+          )}
           <button
             className="btn btn-primary"
             onClick={() => navigate(`${projectBasePath}/secrets`)}
