@@ -1254,6 +1254,28 @@ tbody tr:last-child td { border-bottom: none; }
   border-top: 1px solid var(--border-light);
   line-height: 1.5;
 }
+.team-invite-delivery {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+.team-invite-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.team-invite-cooldown {
+  font-size: 12px;
+  color: var(--warning);
+  line-height: 1.4;
+}
+.team-invite-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
 
 /* Members table */
 .member-cell { display: flex; align-items: center; gap: var(--space-3); }
