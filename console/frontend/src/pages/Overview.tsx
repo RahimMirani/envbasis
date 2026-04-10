@@ -91,9 +91,12 @@ export default function OverviewPage() {
     const controller = new AbortController();
 
     async function loadOverviewData() {
-      if (!cachedOverview) {
-        setIsLoading(true);
+      if (cachedOverview) {
+        setIsLoading(false);
+        return;
       }
+
+      setIsLoading(true);
 
       try {
         if (currentProject.role === 'owner') {
