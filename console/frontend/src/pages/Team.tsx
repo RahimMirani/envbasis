@@ -115,9 +115,12 @@ export default function TeamPage() {
     const controller = new AbortController();
 
     async function loadMembers() {
-      if (!cachedTeam) {
-        setIsLoading(true);
+      if (cachedTeam) {
+        setIsLoading(false);
+        return;
       }
+
+      setIsLoading(true);
       setError(null);
 
       try {
