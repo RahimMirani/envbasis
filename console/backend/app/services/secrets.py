@@ -109,6 +109,57 @@ def get_latest_secret_rows(
     return list(rows)
 
 
+def get_latest_project_secret_rows(
+    db: Session,
+    *,
+    project_id: uuid.UUID,
+    environment_ids: Sequence[uuid.UUID] | None = None,
+    key_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[tuple[Secret, Environment]], str | None]:
+    latest_versions = (
+        select(
+            Secret.environment_id.label("environment_id"),
+            Secret.key.label("key"),
+            func.max(Secret.version).label("latest_version"),
+        )
+        .join(Environment, Environment.id == Secret.environment_id)
+        .where(Environment.project_id == project_id)
+    )
+
+    if environment_ids:
+        latest_versions = latest_versions.where(Secret.environment_id.in_(environment_ids))
+
+    latest_versions = latest_versions.group_by(Secret.environment_id, Secret.key).subquery()
+
+    stmt = (
+        select(Secret, Environment)
+        .join(
+            latest_versions,
+            (Secret.environment_id == latest_versions.c.environment_id)
+            & (Secret.key == latest_versions.c.key)
+            & (Secret.version == latest_versions.c.latest_version),
+        )
+        .join(Environment, Environment.id == Secret.environment_id)
+        .where(Environment.project_id == project_id, Secret.is_deleted.is_(False))
+        .order_by(Secret.key.asc(), Environment.name.asc(), Secret.environment_id.asc())
+        .offset(offset)
+        .limit(limit + 1)
+    )
+
+    if environment_ids:
+        stmt = stmt.where(Secret.environment_id.in_(environment_ids))
+    if key_filter:
+        stmt = stmt.where(Secret.key.ilike(f"%{key_filter}%"))
+
+    rows = list(db.execute(stmt).all())
+    has_more = len(rows) > limit
+    visible_rows = rows[:limit]
+    next_cursor = str(offset + limit) if has_more else None
+    return visible_rows, next_cursor
+
+
 def get_project_secret_stats(
     db: Session,
     *,
