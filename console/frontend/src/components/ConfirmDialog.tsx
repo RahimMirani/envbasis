@@ -5,6 +5,7 @@ interface ConfirmDialogProps {
   isOpen: boolean;
   title: string;
   description: string;
+  errorMessage?: string | null;
   confirmLabel: string;
   onConfirm: () => void;
   onClose: () => void;
@@ -16,6 +17,7 @@ export default function ConfirmDialog({
   isOpen,
   title,
   description,
+  errorMessage,
   confirmLabel,
   onConfirm,
   onClose,
@@ -42,6 +44,11 @@ export default function ConfirmDialog({
       }
     >
       <p>{description}</p>
+      {errorMessage ? (
+        <p className="confirm-dialog-error" role="alert">
+          {errorMessage}
+        </p>
+      ) : null}
     </Modal>
   );
 }
