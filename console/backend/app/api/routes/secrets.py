@@ -18,6 +18,8 @@ from app.schemas.secret import (
     SecretCreateRequest,
     SecretDeleteResponse,
     EnvironmentSecretStatsRead,
+    ProjectSecretItemRead,
+    ProjectSecretListResponse,
     SecretItemRead,
     SecretListResponse,
     SecretMutationResponse,
@@ -37,6 +39,7 @@ from app.services.secrets import (
     MAX_SECRET_KEY_LENGTH,
     build_secret_payload,
     get_latest_secret_rows,
+    get_latest_project_secret_rows,
     get_project_secret_stats,
     validate_single_secret,
 )
@@ -248,6 +251,100 @@ def get_secret_stats(
             EnvironmentSecretStatsRead(**item)
             for item in environment_stats
         ],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@router.get(
+    "/{project_id}/secrets",
+    response_model=ProjectSecretListResponse,
+)
+def list_project_secrets(
+    project_id: uuid.UUID,
+    key: Annotated[
+        str | None,
+        Query(
+            max_length=128,
+            description="Filter secrets by key (case-insensitive substring match)",
+        ),
+    ] = None,
+    environment_id: Annotated[
+        list[uuid.UUID] | None,
+        Query(
+            description="Optional environment scope. Repeat the parameter to include multiple environments.",
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=200, description="Maximum number of secrets to return."),
+    ] = 50,
+    cursor: Annotated[
+        str | None,
+        Query(description="Offset cursor returned by a previous project secrets listing."),
+    ] = None,
+    project_access: ProjectAccess = Depends(require_secret_access),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectSecretListResponse:
+    if project_id != project_access.project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    try:
+        offset = int(cursor) if cursor else 0
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid cursor.",
+        ) from exc
+
+    if offset < 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid cursor.",
+        )
+
+    rows, next_cursor = get_latest_project_secret_rows(
+        db,
+        project_id=project_access.project.id,
+        environment_ids=environment_id,
+        key_filter=key,
+        limit=limit,
+        offset=offset,
+    )
+    secrets = [row for row, _environment in rows]
+    users_by_id = _get_users_by_id(db, secrets)
+
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="secrets.listed",
+        metadata={
+            "secret_count": len(rows),
+            "environment_scope": [str(value) for value in environment_id or []],
+            "key_filter": key,
+            "limit": limit,
+            "cursor": cursor,
+        },
+    )
+    db.commit()
+
+    return ProjectSecretListResponse(
+        project_id=project_access.project.id,
+        secrets=[
+            ProjectSecretItemRead(
+                key=secret.key,
+                version=secret.version,
+                updated_at=secret.updated_at,
+                expires_at=_serialize_secret_expiration(secret.expires_at),
+                updated_by_user_id=secret.updated_by,
+                updated_by_email=users_by_id.get(secret.updated_by).email if secret.updated_by in users_by_id else None,
+                environment_id=environment.id,
+                environment_name=environment.name,
+            )
+            for secret, environment in rows
+        ],
+        next_cursor=next_cursor,
         generated_at=datetime.now(timezone.utc),
     )
 
