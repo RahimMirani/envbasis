@@ -47,6 +47,7 @@ export default function EnvironmentsPage() {
 
   // Delete
   const [envPendingDelete, setEnvPendingDelete] = useState<Environment | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const secretStatsByEnvironmentId = new Map(
@@ -120,12 +121,13 @@ export default function EnvironmentsPage() {
   const handleDelete = async () => {
     if (!envPendingDelete) return;
     setIsDeleting(true);
+    setDeleteError(null);
     try {
       await deleteEnvironment(currentProject.id, envPendingDelete.id, accessToken!);
       onEnvironmentDeleted(envPendingDelete.id);
       setEnvPendingDelete(null);
-    } catch {
-      // keep dialog open so user sees the error isn't swallowed
+    } catch (err) {
+      setDeleteError((err as Error).message || 'Failed to delete environment.');
     } finally {
       setIsDeleting(false);
     }
@@ -205,7 +207,10 @@ export default function EnvironmentsPage() {
                       <button
                         className="btn btn-ghost btn-icon-sm btn-danger-ghost"
                         title="Delete environment"
-                        onClick={() => setEnvPendingDelete(env)}
+                        onClick={() => {
+                          setDeleteError(null);
+                          setEnvPendingDelete(env);
+                        }}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -319,9 +324,15 @@ export default function EnvironmentsPage() {
             ? `Delete "${envPendingDelete.name}"? All secrets and runtime tokens in this environment will be permanently deleted.`
             : ''
         }
+        errorMessage={deleteError}
         confirmLabel="Delete Environment"
         onConfirm={() => { void handleDelete(); }}
-        onClose={() => { if (!isDeleting) setEnvPendingDelete(null); }}
+        onClose={() => {
+          if (!isDeleting) {
+            setEnvPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
         isBusy={isDeleting}
         tone="danger"
       />
