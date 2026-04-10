@@ -12,6 +12,7 @@ from app.models import (
     Secret,
     User,
     Webhook,
+    WebhookDelivery,
 )
 from app.models.base import Base
 
@@ -30,4 +31,5 @@ __all__ = [
     "Secret",
     "User",
     "Webhook",
+    "WebhookDelivery",
 ]
