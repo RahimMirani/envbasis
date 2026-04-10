@@ -578,6 +578,18 @@ tbody tr:last-child td { border-bottom: none; }
 .sidebar-link-active:focus-visible .sidebar-link-icon { color: var(--text-primary); }
 .sidebar-owner-only-hint { display: flex; width: 100%; }
 .sidebar-owner-only-hint .owner-only-hint-target { display: flex; width: 100%; }
+.sidebar-owner-only-hint .owner-only-popup {
+  left: calc(100% + 10px);
+  right: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateX(-6px) translateY(-50%);
+}
+.sidebar-owner-only-hint:hover .owner-only-popup,
+.sidebar-owner-only-hint:focus-visible .owner-only-popup,
+.sidebar-owner-only-hint.is-visible .owner-only-popup {
+  transform: translateX(0) translateY(-50%);
+}
 .sidebar-link-locked {
   width: 100%;
   justify-content: space-between;
