@@ -40,3 +40,19 @@ class WebhookRead(BaseModel):
     is_active: bool
     created_by: uuid.UUID | None
     created_at: datetime
+    latest_delivery: "WebhookDeliveryRead | None" = None
+
+
+class WebhookDeliveryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    webhook_id: uuid.UUID
+    event: str
+    delivery_type: str
+    status: str
+    response_status: int | None
+    error_message: str | None
+    triggered_by: uuid.UUID | None
+    created_at: datetime
+    completed_at: datetime | None
