@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import ConfirmDialog from '../components/ConfirmDialog';
+import OwnerOnlyHint from '../components/OwnerOnlyHint';
 import { deleteProject, updateProject } from '../lib/api';
 import type { Project } from '../types/api';
 
@@ -96,7 +97,10 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-section">
-        <h3 className="settings-section-title">General</h3>
+        <h3 className="settings-section-title">
+          General
+          {!canManageProject && <span className="owner-only-chip">Owner only</span>}
+        </h3>
         <div className="card settings-card">
           {!canManageProject && (
             <p className="settings-note">Only project owners can update these settings.</p>
@@ -128,14 +132,22 @@ export default function SettingsPage() {
           )}
           {successMessage && <p className="settings-success">{successMessage}</p>}
           <div className="settings-card-footer">
-            <button
-              className="btn btn-primary btn-sm"
-              id="save-settings-btn"
-              onClick={handleSave}
-              disabled={!canManageProject || isSaving || isDeleting}
-            >
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </button>
+            {canManageProject ? (
+              <button
+                className="btn btn-primary btn-sm"
+                id="save-settings-btn"
+                onClick={handleSave}
+                disabled={isSaving || isDeleting}
+              >
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </button>
+            ) : (
+              <OwnerOnlyHint message="Only project owners can save settings changes.">
+                <button className="btn btn-primary btn-sm" id="save-settings-btn" disabled>
+                  Save Changes
+                </button>
+              </OwnerOnlyHint>
+            )}
           </div>
         </div>
       </div>
@@ -144,6 +156,7 @@ export default function SettingsPage() {
         <h3 className="settings-section-title settings-danger-title">
           <AlertTriangle size={16} />
           Danger Zone
+          {!canManageProject && <span className="owner-only-chip">Owner only</span>}
         </h3>
         <div className="card settings-card settings-danger-card">
           <div className="settings-danger-item">
@@ -154,14 +167,22 @@ export default function SettingsPage() {
                 cannot be undone.
               </p>
             </div>
-            <button
-              className="btn btn-danger btn-sm"
-              id="delete-project-btn"
-              onClick={() => setShowDeleteConfirm(true)}
-              disabled={!canManageProject || isSaving || isDeleting}
-            >
-              {isDeleting ? 'Deleting...' : 'Delete Project'}
-            </button>
+            {canManageProject ? (
+              <button
+                className="btn btn-danger btn-sm"
+                id="delete-project-btn"
+                onClick={() => setShowDeleteConfirm(true)}
+                disabled={isSaving || isDeleting}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Project'}
+              </button>
+            ) : (
+              <OwnerOnlyHint message="Only project owners can delete this project.">
+                <button className="btn btn-danger btn-sm" id="delete-project-btn" disabled>
+                  Delete Project
+                </button>
+              </OwnerOnlyHint>
+            )}
           </div>
         </div>
       </div>
