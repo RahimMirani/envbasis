@@ -137,9 +137,15 @@ export default function WebhooksPage() {
       return;
     }
 
+    if (cachedWebhooksData && !showSpinner) {
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
     if (showSpinner) {
       setIsRefreshing(true);
-    } else if (!cachedWebhooksData) {
+    } else {
       setIsLoading(true);
     }
     setError(null);
