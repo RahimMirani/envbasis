@@ -13,7 +13,7 @@ import {
 import { useOutletContext } from 'react-router-dom';
 import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
@@ -27,6 +27,7 @@ import {
   ApiError,
 } from '../lib/api';
 import { formatDate, formatRelativeTime } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import type { Project, Environment, RuntimeToken, RuntimeTokenShare, Member } from '../types/api';
 
 interface OutletContextType {
@@ -35,6 +36,12 @@ interface OutletContextType {
   environments: Environment[];
   canManageProject: boolean;
   onRuntimeTokenCountChanged: (delta: number) => void;
+  pageCache: ProjectPageCacheApi;
+}
+
+interface TokensCacheEntry {
+  membersById: Record<string, Member>;
+  tokens: RuntimeToken[];
 }
 
 interface ShareState {
@@ -121,11 +128,16 @@ export default function TokensPage() {
     environments,
     canManageProject,
     onRuntimeTokenCountChanged,
+    pageCache,
   } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
-  const [tokens, setTokens] = useState<RuntimeToken[]>([]);
-  const [membersById, setMembersById] = useState<Record<string, Member>>({});
-  const [isLoading, setIsLoading] = useState(true);
+  const tokensCacheKey = `tokens:${currentProject.id}`;
+  const cachedTokensData = pageCache.get<TokensCacheEntry>(tokensCacheKey);
+  const [tokens, setTokens] = useState<RuntimeToken[]>(() => cachedTokensData?.tokens ?? []);
+  const [membersById, setMembersById] = useState<Record<string, Member>>(
+    () => cachedTokensData?.membersById ?? {}
+  );
+  const [isLoading, setIsLoading] = useState(() => !cachedTokensData);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [tokenName, setTokenName] = useState('');
@@ -198,7 +210,9 @@ export default function TokensPage() {
     const controller = new AbortController();
 
     async function loadTokenData() {
-      setIsLoading(true);
+      if (!cachedTokensData) {
+        setIsLoading(true);
+      }
       setError(null);
 
       try {
@@ -215,6 +229,10 @@ export default function TokensPage() {
         setMembersById(
           Object.fromEntries(memberResponse.map((member) => [member.user_id, member]))
         );
+        pageCache.set<TokensCacheEntry>(tokensCacheKey, {
+          tokens: tokenResponse,
+          membersById: Object.fromEntries(memberResponse.map((member) => [member.user_id, member])),
+        });
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) {
           return;
@@ -235,7 +253,16 @@ export default function TokensPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, currentProject.id]);
+  }, [accessToken, apiConfigError, cachedTokensData, currentProject.id, pageCache, tokensCacheKey]);
+
+  useEffect(() => {
+    if (!isLoading && !error) {
+      pageCache.set<TokensCacheEntry>(tokensCacheKey, {
+        tokens,
+        membersById,
+      });
+    }
+  }, [error, isLoading, membersById, pageCache, tokens, tokensCacheKey]);
 
   const reloadTokens = async () => {
     const tokenResponse = await listRuntimeTokens(currentProject.id, accessToken!);
@@ -555,11 +582,7 @@ export default function TokensPage() {
           <p>Create an environment before issuing runtime tokens.</p>
         </div>
       ) : isLoading ? (
-        <DashboardLoader
-          compact
-          title="Loading runtime tokens"
-          description="Fetching tokens available to this project membership."
-        />
+        <SectionLoader label="Loading runtime tokens" />
       ) : visibleTokens.length === 0 ? (
         <div className="empty-state">
           <h3>No runtime tokens found</h3>
