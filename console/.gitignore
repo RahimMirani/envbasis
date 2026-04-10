@@ -40,3 +40,4 @@ dist-ssr/
 coverage/
 .vite/
 .eslintcache
+*.tsbuildinfo
