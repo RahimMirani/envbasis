@@ -210,9 +210,12 @@ export default function TokensPage() {
     const controller = new AbortController();
 
     async function loadTokenData() {
-      if (!cachedTokensData) {
-        setIsLoading(true);
+      if (cachedTokensData) {
+        setIsLoading(false);
+        return;
       }
+
+      setIsLoading(true);
       setError(null);
 
       try {
