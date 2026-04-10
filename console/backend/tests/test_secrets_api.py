@@ -5,6 +5,7 @@ from app.api.routes.secrets import (
     bulk_delete_secrets,
     create_secret,
     delete_secret,
+    list_project_secrets,
     list_secrets,
     pull_secrets,
     push_secrets,
@@ -332,3 +333,86 @@ def test_bulk_delete_secrets_marks_each_secret_deleted(session_factory, seeder) 
         )
 
     assert list_response.secrets == []
+
+
+def test_project_secret_list_supports_environment_scope_search_and_pagination(
+    session_factory,
+    seeder,
+) -> None:
+    owner = seeder.user("owner-project-list@example.com")
+    project = seeder.project(owner, name="project-list")
+    prod = seeder.environment(project, name="prod")
+    staging = seeder.environment(project, name="staging")
+    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+
+    with session_factory() as db:
+        create_secret(
+            project_id=project.id,
+            environment_id=prod.id,
+            payload=SecretCreateRequest(key="ALPHA_KEY", value="one"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        create_secret(
+            project_id=project.id,
+            environment_id=staging.id,
+            payload=SecretCreateRequest(key="BRAVO_KEY", value="two"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        create_secret(
+            project_id=project.id,
+            environment_id=prod.id,
+            payload=SecretCreateRequest(key="CHARLIE_KEY", value="three"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    with session_factory() as db:
+        first_page = list_project_secrets(
+            project_id=project.id,
+            key=None,
+            environment_id=None,
+            limit=2,
+            cursor=None,
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert [item.key for item in first_page.secrets] == ["ALPHA_KEY", "BRAVO_KEY"]
+    assert first_page.next_cursor == "2"
+
+    with session_factory() as db:
+        second_page = list_project_secrets(
+            project_id=project.id,
+            key=None,
+            environment_id=None,
+            limit=2,
+            cursor=first_page.next_cursor,
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert [item.key for item in second_page.secrets] == ["CHARLIE_KEY"]
+    assert second_page.next_cursor is None
+
+    with session_factory() as db:
+        filtered = list_project_secrets(
+            project_id=project.id,
+            key="BRAVO",
+            environment_id=[staging.id],
+            limit=50,
+            cursor=None,
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert [(item.key, item.environment_name) for item in filtered.secrets] == [
+        ("BRAVO_KEY", "staging")
+    ]
