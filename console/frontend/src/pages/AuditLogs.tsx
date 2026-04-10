@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
-import DashboardLoader from '../components/DashboardLoader';
+import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs, downloadAuditLogs } from '../lib/api';
 import {
@@ -22,12 +22,14 @@ import {
   getAuditIconKey,
 } from '../lib/audit';
 import { formatRelativeTime } from '../lib/format';
+import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getUserDisplayName } from '../lib/user';
 import type { Project, AuditLog } from '../types/api';
 
 interface OutletContextType {
   currentProject: Project;
   currentEnv: string;
+  pageCache: ProjectPageCacheApi;
 }
 
 const auditIcons: Record<string, LucideIcon> = {
@@ -85,10 +87,12 @@ function groupLogsByDate(logs: AuditLog[]): DateGroup[] {
 }
 
 export default function AuditLogsPage() {
-  const { currentProject, currentEnv } = useOutletContext<OutletContextType>();
+  const { currentProject, currentEnv, pageCache } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const auditCacheKey = `audit:${currentProject.id}`;
+  const cachedLogs = pageCache.get<AuditLog[]>(auditCacheKey);
+  const [logs, setLogs] = useState<AuditLog[]>(() => cachedLogs ?? []);
+  const [isLoading, setIsLoading] = useState(() => !cachedLogs);
   const [error, setError] = useState<string | null>(null);
   const [filterAction, setFilterAction] = useState('all');
   const [filterEnv, setFilterEnv] = useState(currentEnv === 'all' ? 'all' : currentEnv);
@@ -111,7 +115,9 @@ export default function AuditLogsPage() {
     const controller = new AbortController();
 
     async function loadAuditLogs() {
-      setIsLoading(true);
+      if (!cachedLogs) {
+        setIsLoading(true);
+      }
       setError(null);
       try {
         const response = await listAuditLogs(currentProject.id, accessToken!, {
@@ -120,6 +126,7 @@ export default function AuditLogsPage() {
         });
         if (!isActive) return;
         setLogs(response);
+        pageCache.set<AuditLog[]>(auditCacheKey, response);
       } catch (loadError) {
         if (!isActive || controller.signal.aborted) return;
         setError((loadError as Error).message || 'Failed to load audit logs.');
@@ -131,7 +138,7 @@ export default function AuditLogsPage() {
 
     void loadAuditLogs();
     return () => { isActive = false; controller.abort(); };
-  }, [accessToken, apiConfigError, currentProject.id]);
+  }, [accessToken, apiConfigError, auditCacheKey, cachedLogs, currentProject.id, pageCache]);
 
   const filteredLogs = useMemo(
     () =>
@@ -224,11 +231,7 @@ export default function AuditLogsPage() {
       )}
 
       {isLoading ? (
-        <DashboardLoader
-          compact
-          title="Loading audit logs"
-          description="Fetching project activity."
-        />
+        <SectionLoader label="Loading audit logs" />
       ) : logs.length === 0 ? (
         <div className="empty-state">
           <h3>No audit events yet</h3>
