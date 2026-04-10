@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import ConfirmDialog from '../components/ConfirmDialog';
+import OwnerOnlyHint from '../components/OwnerOnlyHint';
 import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
@@ -374,20 +375,38 @@ export default function WebhooksPage() {
           </p>
         </div>
         <div className="page-header-actions">
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              void loadWebhooksData(true);
-            }}
-            disabled={!canManageProject || isRefreshing || isLoading}
-          >
-            <RefreshCw size={14} className={isRefreshing ? 'icon-spin' : ''} />
-            {isRefreshing ? 'Refreshing...' : 'Refresh Status'}
-          </button>
-          <button className="btn btn-primary" onClick={openCreateModal} disabled={!canManageProject}>
-            <Plus size={14} />
-            Add Webhook
-          </button>
+          {canManageProject ? (
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                void loadWebhooksData(true);
+              }}
+              disabled={isRefreshing || isLoading}
+            >
+              <RefreshCw size={14} className={isRefreshing ? 'icon-spin' : ''} />
+              {isRefreshing ? 'Refreshing...' : 'Refresh Status'}
+            </button>
+          ) : (
+            <OwnerOnlyHint message="Only project owners can refresh webhook delivery status.">
+              <button className="btn btn-secondary" disabled>
+                <RefreshCw size={14} />
+                Refresh Status
+              </button>
+            </OwnerOnlyHint>
+          )}
+          {canManageProject ? (
+            <button className="btn btn-primary" onClick={openCreateModal}>
+              <Plus size={14} />
+              Add Webhook
+            </button>
+          ) : (
+            <OwnerOnlyHint message="Only project owners can add webhooks.">
+              <button className="btn btn-primary" disabled>
+                <Plus size={14} />
+                Add Webhook
+              </button>
+            </OwnerOnlyHint>
+          )}
         </div>
       </div>
 
@@ -398,7 +417,10 @@ export default function WebhooksPage() {
       )}
 
       {!canManageProject && (
-        <p className="env-note">Only owners can manage webhooks for this project.</p>
+        <p className="env-note">
+          <span className="owner-only-chip">Owner only</span>
+          Only project owners can manage webhooks for this project.
+        </p>
       )}
 
       {isLoading ? (
