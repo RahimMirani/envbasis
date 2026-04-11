@@ -27,6 +27,7 @@ export default function ProjectLayout() {
   const [currentEnv, setCurrentEnv] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const pageCacheRef = useRef(createProjectPageCache());
 
   const projectBasePath = `/projects/${projectId}`;
@@ -330,14 +331,21 @@ export default function ProjectLayout() {
         environments={environments}
         currentEnv={currentEnv}
         onEnvChange={setCurrentEnv}
+        onMenuOpen={() => setSidebarOpen(true)}
       />
       <div className="project-layout-body">
+        <div
+          className={`sidebar-backdrop${sidebarOpen ? ' sidebar-open' : ''}`}
+          onClick={() => setSidebarOpen(false)}
+        />
         <Sidebar
           basePath={projectBasePath}
           projectName={currentProject.name}
           projectRole={currentProject.role}
           currentProjectId={currentProject.id}
           projects={projects}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
         <main className="project-layout-main">
           <Outlet
