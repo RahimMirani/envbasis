@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut } from 'lucide-react';
+import { LogOut, Menu } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import { getUserDisplayName, getUserInitials } from '../lib/user';
 import type { Environment } from '../types/api';
@@ -9,6 +9,7 @@ interface TopBarProps {
   environments?: Environment[];
   currentEnv?: string;
   onEnvChange?: (env: string) => void;
+  onMenuOpen?: () => void;
 }
 
 export default function TopBar({
@@ -16,6 +17,7 @@ export default function TopBar({
   environments = [],
   currentEnv = 'all',
   onEnvChange,
+  onMenuOpen,
 }: TopBarProps) {
   const pageTitles: Record<string, string> = {
     overview: 'Overview',
@@ -42,6 +44,11 @@ export default function TopBar({
   return (
     <header className="topbar">
       <div className="topbar-left">
+        {onMenuOpen && (
+          <button className="topbar-hamburger" onClick={onMenuOpen} aria-label="Open navigation">
+            <Menu size={20} />
+          </button>
+        )}
         <Link to="/" className="topbar-logo">
           EnvBasis
         </Link>
