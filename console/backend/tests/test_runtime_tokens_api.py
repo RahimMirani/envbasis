@@ -18,11 +18,37 @@ from app.schemas.runtime_token_share import RuntimeTokenShareRequest
 from app.schemas.secret import SecretPushRequest
 
 
+def _project_access(
+    project,
+    *,
+    role: str,
+    can_push_pull_secrets: bool = False,
+    can_manage_runtime_tokens: bool = False,
+    can_manage_team: bool = False,
+    can_view_audit_logs: bool = False,
+) -> ProjectAccess:
+    return ProjectAccess(
+        project=project,
+        role=role,
+        can_push_pull_secrets=can_push_pull_secrets,
+        can_manage_runtime_tokens=can_manage_runtime_tokens,
+        can_manage_team=can_manage_team,
+        can_view_audit_logs=can_view_audit_logs,
+    )
+
+
 def test_runtime_token_create_fetch_list_and_revoke(session_factory, seeder) -> None:
     owner = seeder.user("owner-runtime@example.com")
     project = seeder.project(owner, name="runtime-project")
     environment = seeder.environment(project, name="prod")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _project_access(
+        project,
+        role="owner",
+        can_push_pull_secrets=True,
+        can_manage_runtime_tokens=True,
+        can_manage_team=True,
+        can_view_audit_logs=True,
+    )
 
     with session_factory() as db:
         push_response = push_secrets(
@@ -108,8 +134,15 @@ def test_shared_member_can_list_and_reveal_shared_runtime_token(session_factory,
     project = seeder.project(owner, name="sharing-project")
     environment = seeder.environment(project, name="dev")
     seeder.add_member(project=project, user=member, invited_by=owner)
-    owner_access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
-    member_access = ProjectAccess(project=project, role="member", can_push_pull_secrets=True)
+    owner_access = _project_access(
+        project,
+        role="owner",
+        can_push_pull_secrets=True,
+        can_manage_runtime_tokens=True,
+        can_manage_team=True,
+        can_view_audit_logs=True,
+    )
+    member_access = _project_access(project, role="member")
 
     with session_factory() as db:
         create_response = create_runtime_token(
@@ -123,8 +156,10 @@ def test_shared_member_can_list_and_reveal_shared_runtime_token(session_factory,
 
     with session_factory() as db:
         share_response = share_runtime_token(
+            project_id=project.id,
             token_id=create_response.id,
             payload=RuntimeTokenShareRequest(email=member.email),
+            project_access=owner_access,
             current_user=owner,
             db=db,
         )
