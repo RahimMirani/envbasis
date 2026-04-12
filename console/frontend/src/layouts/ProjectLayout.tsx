@@ -35,6 +35,7 @@ export default function ProjectLayout() {
 
   useEffect(() => {
     pageCacheRef.current.clear();
+    setSidebarOpen(false);
   }, [projectId]);
 
   useEffect(() => {
@@ -334,9 +335,11 @@ export default function ProjectLayout() {
         onMenuOpen={() => setSidebarOpen(true)}
       />
       <div className="project-layout-body">
-        <div
+        <button
+          type="button"
           className={`sidebar-backdrop${sidebarOpen ? ' sidebar-open' : ''}`}
           onClick={() => setSidebarOpen(false)}
+          aria-label="Close sidebar"
         />
         <Sidebar
           basePath={projectBasePath}
