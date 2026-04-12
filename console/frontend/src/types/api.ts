@@ -11,6 +11,11 @@ export interface Project {
   name: string;
   description: string | null;
   role: 'owner' | 'member';
+  audit_log_visibility: 'owner_only' | 'members' | 'specific';
+  can_manage_secrets: boolean;
+  can_manage_runtime_tokens: boolean;
+  can_manage_team: boolean;
+  can_view_audit_logs: boolean;
   environment_count: number;
   member_count: number;
   runtime_token_count: number;
@@ -79,6 +84,9 @@ export interface Member {
   email: string;
   role: 'owner' | 'member';
   can_push_pull_secrets: boolean;
+  can_manage_runtime_tokens: boolean;
+  can_manage_team: boolean;
+  can_view_audit_logs: boolean;
   joined_at: string;
 }
 
@@ -89,6 +97,9 @@ export interface ProjectInvitation {
   email: string;
   role: string;
   can_push_pull_secrets: boolean;
+  can_manage_runtime_tokens: boolean;
+  can_manage_team: boolean;
+  can_view_audit_logs: boolean;
   invited_by_email: string | null;
   status: string;
   expires_at: string;
@@ -106,6 +117,9 @@ export interface InvitationSummary {
   email: string;
   role: string;
   can_push_pull_secrets: boolean;
+  can_manage_runtime_tokens: boolean;
+  can_manage_team: boolean;
+  can_view_audit_logs: boolean;
   status: 'pending';
   expires_at: string;
   created_at: string;
@@ -119,6 +133,9 @@ export interface InvitationDetail {
   email: string;
   role: string;
   can_push_pull_secrets: boolean;
+  can_manage_runtime_tokens: boolean;
+  can_manage_team: boolean;
+  can_view_audit_logs: boolean;
   status: string;
   expires_at: string;
   created_at: string;
@@ -144,8 +161,12 @@ export interface RuntimeToken {
 
 export interface RuntimeTokenShare {
   id: string;
+  runtime_token_id: string;
+  user_id: string;
   email: string;
-  shared_at: string;
+  shared_by: string | null;
+  can_manage: boolean;
+  created_at: string;
 }
 
 export interface AuditLog {
