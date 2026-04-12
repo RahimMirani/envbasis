@@ -1691,6 +1691,9 @@ tbody tr:last-child td { border-bottom: none; }
   background: rgba(0, 0, 0, 0.5);
   z-index: 299;
   backdrop-filter: blur(2px);
+  border: none;
+  padding: 0;
+  cursor: default;
 }
 
 @media (max-width: 768px) {
