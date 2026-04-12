@@ -14,6 +14,7 @@ from app.api.deps import (
     get_current_user,
     get_project_access,
     require_project_owner,
+    require_team_management,
 )
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
@@ -27,9 +28,10 @@ from app.schemas.common import MessageResponse
 from app.schemas.environment import EnvironmentCreate, EnvironmentRead, EnvironmentUpdate
 from app.schemas.invitation import InviteMemberResponse, ProjectInvitationRead
 from app.schemas.member import (
-    MemberAccessUpdateRequest,
+    MemberBulkPermissionUpdateRequest,
     MemberBulkRevokeRequest,
     MemberInviteRequest,
+    MemberPermissionUpdateRequest,
     MemberRevokeRequest,
     ProjectMemberRead,
 )
@@ -120,6 +122,11 @@ def _get_project_stats_map(
 def _serialize_project(
     project: Project,
     role: str,
+    *,
+    can_manage_secrets: bool,
+    can_manage_runtime_tokens: bool,
+    can_manage_team: bool,
+    can_view_audit_logs: bool,
     stats_map: dict[uuid.UUID, dict[str, object]] | None = None,
 ) -> ProjectRead:
     stats = (stats_map or {}).get(project.id, {})
@@ -129,6 +136,11 @@ def _serialize_project(
         description=project.description,
         owner_id=project.owner_id,
         role=role,
+        audit_log_visibility=project.audit_log_visibility,
+        can_manage_secrets=can_manage_secrets,
+        can_manage_runtime_tokens=can_manage_runtime_tokens,
+        can_manage_team=can_manage_team,
+        can_view_audit_logs=can_view_audit_logs,
         created_at=project.created_at,
         environment_count=int(stats.get("environment_count", 0)),
         member_count=int(stats.get("member_count", 0)),
@@ -143,6 +155,9 @@ def _serialize_member(member: ProjectMember, user: User) -> ProjectMemberRead:
         email=user.email,
         role=member.role,
         can_push_pull_secrets=member.can_push_pull_secrets,
+        can_manage_runtime_tokens=member.can_manage_runtime_tokens,
+        can_manage_team=member.can_manage_team,
+        can_view_audit_logs=member.can_view_audit_logs,
         joined_at=member.created_at,
     )
 
@@ -393,7 +408,12 @@ def create_project(
     if description == "":
         description = None
 
-    project = Project(name=project_name, description=description, owner_id=current_user.id)
+    project = Project(
+        name=project_name,
+        description=description,
+        owner_id=current_user.id,
+        audit_log_visibility="owner_only",
+    )
     db.add(project)
     db.flush()
 
@@ -403,6 +423,8 @@ def create_project(
             user_id=current_user.id,
             role=ROLE_OWNER,
             can_push_pull_secrets=True,
+            can_manage_runtime_tokens=True,
+            can_manage_team=True,
             invited_by=current_user.id,
         )
     )
@@ -416,7 +438,15 @@ def create_project(
     db.commit()
     db.refresh(project)
     stats_map = _get_project_stats_map(db, project_ids=[project.id])
-    return _serialize_project(project, ROLE_OWNER, stats_map)
+    return _serialize_project(
+        project,
+        ROLE_OWNER,
+        can_manage_secrets=True,
+        can_manage_runtime_tokens=True,
+        can_manage_team=True,
+        can_view_audit_logs=True,
+        stats_map=stats_map,
+    )
 
 
 @router.get("", response_model=list[ProjectRead])
@@ -426,7 +456,14 @@ def list_projects(
 ) -> list[ProjectRead]:
     membership = aliased(ProjectMember)
     stmt = (
-        select(Project, membership.role)
+        select(
+            Project,
+            membership.role,
+            membership.can_push_pull_secrets,
+            membership.can_manage_runtime_tokens,
+            membership.can_manage_team,
+            membership.can_view_audit_logs,
+        )
         .outerjoin(
             membership,
             and_(
@@ -444,14 +481,42 @@ def list_projects(
     )
 
     rows = db.execute(stmt).all()
-    stats_map = _get_project_stats_map(db, project_ids=[project.id for project, _ in rows])
+    stats_map = _get_project_stats_map(
+        db,
+        project_ids=[project.id for project, *_ in rows],
+    )
     return [
         _serialize_project(
             project,
             ROLE_OWNER if project.owner_id == current_user.id else role or ROLE_MEMBER,
-            stats_map,
+            can_manage_secrets=(
+                True if project.owner_id == current_user.id else bool(can_push_pull_secrets)
+            ),
+            can_manage_runtime_tokens=(
+                True if project.owner_id == current_user.id else bool(can_manage_runtime_tokens)
+            ),
+            can_manage_team=True if project.owner_id == current_user.id else bool(can_manage_team),
+            can_view_audit_logs=(
+                True
+                if project.owner_id == current_user.id
+                else (
+                    project.audit_log_visibility == "members"
+                    or (
+                        project.audit_log_visibility == "specific"
+                        and bool(can_view_audit_logs)
+                    )
+                )
+            ),
+            stats_map=stats_map,
         )
-        for project, role in rows
+        for (
+            project,
+            role,
+            can_push_pull_secrets,
+            can_manage_runtime_tokens,
+            can_manage_team,
+            can_view_audit_logs,
+        ) in rows
     ]
 
 
@@ -464,7 +529,17 @@ def get_project(
         db,
         project_ids=[project_access.project.id],
     )
-    return _serialize_project(project_access.project, project_access.role, stats_map)
+    return _serialize_project(
+        project_access.project,
+        project_access.role,
+        can_manage_secrets=project_access.role == ROLE_OWNER or project_access.can_push_pull_secrets,
+        can_manage_runtime_tokens=(
+            project_access.role == ROLE_OWNER or project_access.can_manage_runtime_tokens
+        ),
+        can_manage_team=project_access.role == ROLE_OWNER or project_access.can_manage_team,
+        can_view_audit_logs=project_access.role == ROLE_OWNER or project_access.can_view_audit_logs,
+        stats_map=stats_map,
+    )
 
 
 @router.patch("/{project_id}", response_model=ProjectRead)
@@ -491,6 +566,10 @@ def update_project(
         project_access.project.description = description
         metadata["description"] = description
 
+    if payload.audit_log_visibility is not None:
+        project_access.project.audit_log_visibility = payload.audit_log_visibility
+        metadata["audit_log_visibility"] = payload.audit_log_visibility
+
     write_audit_log(
         db,
         project_id=project_access.project.id,
@@ -501,7 +580,15 @@ def update_project(
     db.commit()
     db.refresh(project_access.project)
     stats_map = _get_project_stats_map(db, project_ids=[project_access.project.id])
-    return _serialize_project(project_access.project, project_access.role, stats_map)
+    return _serialize_project(
+        project_access.project,
+        project_access.role,
+        can_manage_secrets=True,
+        can_manage_runtime_tokens=True,
+        can_manage_team=True,
+        can_view_audit_logs=True,
+        stats_map=stats_map,
+    )
 
 
 @router.delete("/{project_id}", response_model=MessageResponse)
@@ -670,6 +757,9 @@ def list_members(
                 email=owner.email,
                 role=ROLE_OWNER,
                 can_push_pull_secrets=True,
+                can_manage_runtime_tokens=True,
+                can_manage_team=True,
+                can_view_audit_logs=True,
                 joined_at=project_access.project.created_at,
             )
 
@@ -681,7 +771,7 @@ def list_members(
     response_model=list[ProjectInvitationRead],
 )
 def list_pending_invitations(
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_team_management),
     db: Session = Depends(get_db),
 ) -> list[ProjectInvitationRead]:
     return list_project_invitations(db, project=project_access.project)
@@ -693,7 +783,7 @@ def list_pending_invitations(
 )
 def revoke_invitation(
     invitation_id: uuid.UUID,
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_team_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
@@ -713,7 +803,7 @@ def revoke_invitation(
 )
 def invite_member(
     payload: MemberInviteRequest,
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_team_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> InviteMemberResponse:
@@ -723,14 +813,37 @@ def invite_member(
         invited_email=str(payload.email),
         role=payload.role,
         can_push_pull_secrets=payload.can_push_pull_secrets,
+        can_manage_runtime_tokens=payload.can_manage_runtime_tokens,
+        can_manage_team=payload.can_manage_team,
+        can_view_audit_logs=payload.can_view_audit_logs,
         invited_by=current_user,
     )
 
 
-@router.post("/{project_id}/members/access", response_model=ProjectMemberRead)
-def update_member_secret_access(
-    payload: MemberAccessUpdateRequest,
-    project_access: ProjectAccess = Depends(require_project_owner),
+def _apply_member_permission_updates(
+    membership: ProjectMember,
+    payload: MemberPermissionUpdateRequest | MemberBulkPermissionUpdateRequest,
+) -> dict[str, bool]:
+    updates: dict[str, bool] = {}
+    if payload.can_push_pull_secrets is not None:
+        membership.can_push_pull_secrets = payload.can_push_pull_secrets
+        updates["can_push_pull_secrets"] = payload.can_push_pull_secrets
+    if payload.can_manage_runtime_tokens is not None:
+        membership.can_manage_runtime_tokens = payload.can_manage_runtime_tokens
+        updates["can_manage_runtime_tokens"] = payload.can_manage_runtime_tokens
+    if payload.can_manage_team is not None:
+        membership.can_manage_team = payload.can_manage_team
+        updates["can_manage_team"] = payload.can_manage_team
+    if payload.can_view_audit_logs is not None:
+        membership.can_view_audit_logs = payload.can_view_audit_logs
+        updates["can_view_audit_logs"] = payload.can_view_audit_logs
+    return updates
+
+
+@router.post("/{project_id}/members/permissions", response_model=ProjectMemberRead)
+def update_member_permissions(
+    payload: MemberPermissionUpdateRequest,
+    project_access: ProjectAccess = Depends(require_team_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectMemberRead:
@@ -745,7 +858,7 @@ def update_member_secret_access(
     if member_user.id == project_access.project.owner_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Project owner secret access cannot be changed.",
+            detail="Project owner permissions cannot be changed.",
         )
 
     membership = _get_project_member_or_404(
@@ -753,26 +866,72 @@ def update_member_secret_access(
         project_id=project_access.project.id,
         user_id=member_user.id,
     )
-    membership.can_push_pull_secrets = payload.can_push_pull_secrets
+    updates = _apply_member_permission_updates(membership, payload)
     write_audit_log(
         db,
         project_id=project_access.project.id,
         user_id=current_user.id,
-        action="member.secret_access.updated",
-        metadata={
-            "email": member_user.email,
-            "can_push_pull_secrets": payload.can_push_pull_secrets,
-        },
+        action="member.permissions.updated",
+        metadata={"email": member_user.email, **updates},
     )
     db.commit()
     db.refresh(membership)
     return _serialize_member(membership, member_user)
 
 
+@router.post("/{project_id}/members/permissions/bulk", response_model=list[ProjectMemberRead])
+def bulk_update_member_permissions(
+    payload: MemberBulkPermissionUpdateRequest,
+    project_access: ProjectAccess = Depends(require_team_management),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ProjectMemberRead]:
+    normalized_emails = [email.strip().lower() for email in payload.emails]
+    users = db.scalars(select(User).where(User.email.in_(normalized_emails))).all()
+    users_by_email = {user.email.lower(): user for user in users}
+    updated_members: list[ProjectMemberRead] = []
+
+    for email in normalized_emails:
+        member_user = users_by_email.get(email)
+        if member_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User not found: {email}",
+            )
+        if member_user.id == project_access.project.owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project owner permissions cannot be changed.",
+            )
+
+        membership = _get_project_member_or_404(
+            db,
+            project_id=project_access.project.id,
+            user_id=member_user.id,
+        )
+        _apply_member_permission_updates(membership, payload)
+        updated_members.append(_serialize_member(membership, member_user))
+
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="members.permissions.bulk_updated",
+        metadata={
+            "emails": normalized_emails,
+            "can_push_pull_secrets": payload.can_push_pull_secrets,
+            "can_manage_runtime_tokens": payload.can_manage_runtime_tokens,
+            "can_manage_team": payload.can_manage_team,
+        },
+    )
+    db.commit()
+    return updated_members
+
+
 @router.post("/{project_id}/revoke", response_model=MessageResponse)
 def revoke_member(
     payload: MemberRevokeRequest,
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_team_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
@@ -800,7 +959,7 @@ def revoke_member(
 @router.post("/{project_id}/members/bulk-revoke", response_model=MessageResponse)
 def bulk_revoke_members(
     payload: MemberBulkRevokeRequest,
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_team_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
