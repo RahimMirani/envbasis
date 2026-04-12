@@ -141,6 +141,7 @@ export default function Sidebar({
     setIsProjectMenuOpen(false);
     setProjectSearch('');
     setDiscoveryState(markProjectVisited(project.id));
+    if (onClose) onClose();
     navigate(`/projects/${project.id}/overview`);
   };
 
@@ -166,7 +167,7 @@ export default function Sidebar({
   return (
     <aside className={`sidebar${open ? ' sidebar-open' : ''}`}>
       <div className="sidebar-header">
-        <Link to="/" className="sidebar-back-btn">
+        <Link to="/" className="sidebar-back-btn" onClick={handleNavClick}>
           <ArrowLeft size={14} />
           <span>All Projects</span>
         </Link>
@@ -246,7 +247,7 @@ export default function Sidebar({
               )}
             </div>
             <div className="project-switcher-footer">
-              <Link to="/" onClick={() => setIsProjectMenuOpen(false)}>
+              <Link to="/" onClick={() => { setIsProjectMenuOpen(false); if (onClose) onClose(); }}>
                 View all projects
               </Link>
             </div>
