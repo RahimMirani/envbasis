@@ -19,3 +19,8 @@ class Project(UUIDPrimaryKeyMixin, CreatedAtMixin, NamedMixin, Base):
         nullable=False,
     )
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    audit_log_visibility: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="owner_only",
+    )
