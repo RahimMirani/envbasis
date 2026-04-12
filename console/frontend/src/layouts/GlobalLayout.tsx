@@ -18,9 +18,11 @@ export default function GlobalLayout() {
         </button>
         <span className="global-mobile-topbar-logo">envbasis</span>
       </header>
-      <div
+      <button
+        type="button"
         className={`sidebar-backdrop${sidebarOpen ? ' sidebar-open' : ''}`}
         onClick={() => setSidebarOpen(false)}
+        aria-label="Close navigation"
       />
       <GlobalSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <main className="global-layout-main">
