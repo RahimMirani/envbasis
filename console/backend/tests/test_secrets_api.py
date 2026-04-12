@@ -23,11 +23,22 @@ from app.schemas.secret import (
 )
 
 
+def _owner_access(project) -> ProjectAccess:
+    return ProjectAccess(
+        project=project,
+        role="owner",
+        can_push_pull_secrets=True,
+        can_manage_runtime_tokens=True,
+        can_manage_team=True,
+        can_view_audit_logs=True,
+    )
+
+
 def test_secret_push_list_pull_and_reveal_round_trip(session_factory, seeder) -> None:
     owner = seeder.user("owner@example.com")
     project = seeder.project(owner, name="secret-project")
     environment = seeder.environment(project, name="prod")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     with session_factory() as db:
         push_response = push_secrets(
@@ -128,7 +139,7 @@ def test_secret_create_update_and_delete_increment_versions(session_factory, see
     owner = seeder.user("owner-2@example.com")
     project = seeder.project(owner, name="mutation-project")
     environment = seeder.environment(project, name="staging")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     with session_factory() as db:
         create_response = create_secret(
@@ -211,7 +222,7 @@ def test_secret_expiration_can_be_set_updated_and_cleared(session_factory, seede
     owner = seeder.user("owner-expiry@example.com")
     project = seeder.project(owner, name="expiry-project")
     environment = seeder.environment(project, name="prod")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
     initial_expiry = datetime.now(timezone.utc) + timedelta(days=7)
     updated_expiry = datetime.now(timezone.utc) + timedelta(days=14)
 
@@ -287,7 +298,7 @@ def test_bulk_delete_secrets_marks_each_secret_deleted(session_factory, seeder) 
     owner = seeder.user("owner-bulk-delete@example.com")
     project = seeder.project(owner, name="bulk-delete-project")
     environment = seeder.environment(project, name="prod")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     with session_factory() as db:
         create_secret(
@@ -343,7 +354,7 @@ def test_project_secret_list_supports_environment_scope_search_and_pagination(
     project = seeder.project(owner, name="project-list")
     prod = seeder.environment(project, name="prod")
     staging = seeder.environment(project, name="staging")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     with session_factory() as db:
         create_secret(
