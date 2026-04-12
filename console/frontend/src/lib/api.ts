@@ -190,7 +190,7 @@ export function getProject(
 export function updateProject(
   projectId: string,
   accessToken: string,
-  body: { name?: string; description?: string | null },
+  body: { name?: string; description?: string | null; audit_log_visibility?: 'owner_only' | 'members' | 'specific' },
   options: RequestOptions = {}
 ): Promise<Project> {
   return apiRequest<Project>(`/projects/${encodePathSegment(projectId)}`, {
@@ -457,7 +457,14 @@ export function listMembers(
 export function inviteMember(
   projectId: string,
   accessToken: string,
-  body: { email: string; role?: string; can_push_pull_secrets?: boolean },
+  body: {
+    email: string;
+    role?: string;
+    can_push_pull_secrets?: boolean;
+    can_manage_runtime_tokens?: boolean;
+    can_manage_team?: boolean;
+    can_view_audit_logs?: boolean;
+  },
   options: RequestOptions = {}
 ): Promise<InviteMemberResponse> {
   return apiRequest<InviteMemberResponse>(`/projects/${encodePathSegment(projectId)}/invite`, {
@@ -560,6 +567,49 @@ export function updateMemberSecretAccess(
   });
 }
 
+export function updateMemberPermissions(
+  projectId: string,
+  accessToken: string,
+  body: {
+    email: string;
+    can_push_pull_secrets?: boolean;
+    can_manage_runtime_tokens?: boolean;
+    can_manage_team?: boolean;
+    can_view_audit_logs?: boolean;
+  },
+  options: RequestOptions = {}
+): Promise<Member> {
+  return apiRequest<Member>(`/projects/${encodePathSegment(projectId)}/members/permissions`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
+}
+
+export function bulkUpdateMemberPermissions(
+  projectId: string,
+  accessToken: string,
+  body: {
+    emails: string[];
+    can_push_pull_secrets?: boolean;
+    can_manage_runtime_tokens?: boolean;
+    can_manage_team?: boolean;
+    can_view_audit_logs?: boolean;
+  },
+  options: RequestOptions = {}
+): Promise<Member[]> {
+  return apiRequest<Member[]>(
+    `/projects/${encodePathSegment(projectId)}/members/permissions/bulk`,
+    {
+      ...options,
+      method: 'POST',
+      accessToken,
+      body,
+    }
+  );
+}
+
 export function revokeMember(
   projectId: string,
   accessToken: string,
@@ -620,28 +670,36 @@ export function createRuntimeToken(
 }
 
 export function shareRuntimeToken(
+  projectId: string,
   tokenId: string,
   accessToken: string,
   body: { email: string },
   options: RequestOptions = {}
 ): Promise<RuntimeTokenShare> {
-  return apiRequest<RuntimeTokenShare>(`/runtime-tokens/${encodePathSegment(tokenId)}/share`, {
-    ...options,
-    method: 'POST',
-    accessToken,
-    body,
-  });
+  return apiRequest<RuntimeTokenShare>(
+    `/projects/${encodePathSegment(projectId)}/runtime-tokens/${encodePathSegment(tokenId)}/share`,
+    {
+      ...options,
+      method: 'POST',
+      accessToken,
+      body,
+    }
+  );
 }
 
 export function listRuntimeTokenShares(
+  projectId: string,
   tokenId: string,
   accessToken: string,
   options: RequestOptions = {}
 ): Promise<RuntimeTokenShare[]> {
-  return apiRequest<RuntimeTokenShare[]>(`/runtime-tokens/${encodePathSegment(tokenId)}/shares`, {
-    ...options,
-    accessToken,
-  });
+  return apiRequest<RuntimeTokenShare[]>(
+    `/projects/${encodePathSegment(projectId)}/runtime-tokens/${encodePathSegment(tokenId)}/shares`,
+    {
+      ...options,
+      accessToken,
+    }
+  );
 }
 
 export function revealRuntimeToken(
