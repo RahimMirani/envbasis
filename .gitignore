@@ -1,0 +1,25 @@
+# Sensitive local environment files
+.env
+.env.*
+!.env.example
+
+# Database dumps and local database files
+*.sql
+*.dump
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
