@@ -1382,6 +1382,69 @@ tbody tr:last-child td { border-bottom: none; }
 .team-bulk-conflict-block:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .invite-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-top: var(--space-2); }
 
+/* Bulk action bar */
+.bulk-bar {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-4); margin-bottom: var(--space-5);
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-sm);
+}
+.bulk-bar-count { font-size: var(--text-sm); font-weight: 500; color: var(--text-primary); flex-shrink: 0; }
+.bulk-bar-divider { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; }
+
+/* Permission popover */
+.perm-popover-root { position: relative; }
+.perm-popover {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 200;
+  min-width: 210px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: var(--space-1);
+  animation: dropdownOpen 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.perm-popover-bulk { right: auto; left: 0; }
+.perm-popover-title {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-tertiary);
+}
+.perm-popover-row {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+  cursor: pointer; transition: background var(--transition-fast); user-select: none;
+}
+.perm-popover-row:hover { background: var(--accent-subtle); }
+.perm-popover-label { font-size: var(--text-sm); color: var(--text-primary); flex: 1; }
+.perm-mixed-hint {
+  font-size: 10px; color: var(--text-tertiary);
+  background: rgba(255,255,255,0.05); border-radius: 3px;
+  padding: 1px 5px; flex-shrink: 0;
+}
+
+/* Per-member popover row intent indicators */
+.perm-row-will-add:hover { background: rgba(16, 185, 129, 0.06); }
+.perm-row-will-remove:hover { background: rgba(239, 68, 68, 0.06); }
+.perm-action-hint { font-size: 10px; font-weight: 500; flex-shrink: 0; opacity: 0; transition: opacity var(--transition-fast); }
+.perm-popover-row:hover .perm-action-hint { opacity: 1; }
+.perm-action-hint-add { color: var(--success); }
+.perm-action-hint-remove { color: var(--danger); }
+
+/* Bulk grant/revoke action rows */
+.perm-action-row {
+  display: flex; align-items: center; gap: var(--space-3); width: 100%;
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+  border: none; background: transparent; cursor: pointer; text-align: left;
+  transition: background var(--transition-fast); user-select: none;
+}
+.perm-action-grant:hover:not(:disabled) { background: rgba(16, 185, 129, 0.08); }
+.perm-action-grant:hover:not(:disabled) .perm-popover-label { color: var(--success); }
+.perm-action-revoke:hover:not(:disabled) { background: rgba(239, 68, 68, 0.08); }
+.perm-action-revoke:hover:not(:disabled) .perm-popover-label { color: var(--danger); }
+.perm-action-noop { opacity: 0.35; cursor: not-allowed; }
+
+/* Permission badge list & misc */
+.perm-badge-list { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.invite-perms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2) var(--space-4); }
+.team-row-actions { display: flex; align-items: center; gap: var(--space-1); }
+
 /* ==========================================
    TOKENS PAGE
    ========================================== */
