@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr
 
 class RuntimeTokenShareRequest(BaseModel):
     email: EmailStr
+    can_manage: bool = False
 
 
 class RuntimeTokenShareRead(BaseModel):
@@ -16,6 +17,7 @@ class RuntimeTokenShareRead(BaseModel):
     user_id: uuid.UUID
     email: EmailStr
     shared_by: uuid.UUID | None
+    can_manage: bool
     created_at: datetime
 
 
