@@ -98,6 +98,15 @@ export default function AuditLogsPage() {
   const [filterEnv, setFilterEnv] = useState(currentEnv === 'all' ? 'all' : currentEnv);
   const [isExporting, setIsExporting] = useState(false);
 
+  if (!currentProject.can_view_audit_logs) {
+    return (
+      <div className="empty-state">
+        <h3>Audit logs are restricted</h3>
+        <p>The project owner has not enabled audit log visibility for members.</p>
+      </div>
+    );
+  }
+
   useEffect(() => {
     setFilterEnv(currentEnv === 'all' ? 'all' : currentEnv);
   }, [currentEnv]);
