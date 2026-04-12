@@ -342,6 +342,7 @@ export default function ProjectLayout() {
           basePath={projectBasePath}
           projectName={currentProject.name}
           projectRole={currentProject.role}
+          canViewAuditLogs={currentProject.can_view_audit_logs}
           currentProjectId={currentProject.id}
           projects={projects}
           open={sidebarOpen}
