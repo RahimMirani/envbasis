@@ -13,10 +13,21 @@ from app.api.routes.webhooks import (
 from app.schemas.webhook import WebhookCreate
 
 
+def _owner_access(project) -> ProjectAccess:
+    return ProjectAccess(
+        project=project,
+        role="owner",
+        can_push_pull_secrets=True,
+        can_manage_runtime_tokens=True,
+        can_manage_team=True,
+        can_view_audit_logs=True,
+    )
+
+
 def test_webhook_create_list_delete_and_list_events(session_factory, seeder) -> None:
     owner = seeder.user("owner-webhooks@example.com")
     project = seeder.project(owner, name="webhook-project")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     with session_factory() as db:
         created = create_webhook(
@@ -75,7 +86,7 @@ def test_webhook_test_delivery_history_and_latest_status(
 ) -> None:
     owner = seeder.user("owner-webhook-tests@example.com")
     project = seeder.project(owner, name="webhook-tests")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     monkeypatch.setattr(
         webhook_service,
