@@ -9,7 +9,7 @@ import {
   Send,
   RefreshCw,
 } from 'lucide-react';
-import { useOutletContext } from 'react-router-dom';
+import { Navigate, useOutletContext } from 'react-router-dom';
 import ConfirmDialog from '../components/ConfirmDialog';
 import OwnerOnlyHint from '../components/OwnerOnlyHint';
 import SectionLoader from '../components/SectionLoader';
@@ -87,6 +87,11 @@ function getDeliveryStatusLabel(delivery: WebhookDelivery): string {
 export default function WebhooksPage() {
   const { currentProject, canManageProject, pageCache } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
+
+  if (!canManageProject) {
+    return <Navigate to={`/projects/${currentProject.id}/overview`} replace />;
+  }
+
   const webhooksCacheKey = `webhooks:${currentProject.id}`;
   const cachedWebhooksData = pageCache.get<WebhooksCacheEntry>(webhooksCacheKey);
 
