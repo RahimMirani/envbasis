@@ -11,7 +11,7 @@ import {
   LucideIcon,
   X,
 } from 'lucide-react';
-import { useOutletContext } from 'react-router-dom';
+import { Navigate, useOutletContext } from 'react-router-dom';
 import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs, downloadAuditLogs } from '../lib/api';
@@ -99,12 +99,7 @@ export default function AuditLogsPage() {
   const [isExporting, setIsExporting] = useState(false);
 
   if (!currentProject.can_view_audit_logs) {
-    return (
-      <div className="empty-state">
-        <h3>Audit logs are restricted</h3>
-        <p>The project owner has not enabled audit log visibility for members.</p>
-      </div>
-    );
+    return <Navigate to={`/projects/${currentProject.id}/overview`} replace />;
   }
 
   useEffect(() => {
