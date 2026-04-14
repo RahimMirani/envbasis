@@ -43,6 +43,8 @@ interface SidebarProps {
   projectName: string;
   projectRole: 'owner' | 'member';
   projects: Project[];
+  open?: boolean;
+  onClose?: () => void;
 }
 
 function getProjectInitials(name: string): string {
@@ -61,6 +63,8 @@ export default function Sidebar({
   projectName,
   projectRole,
   projects,
+  open = false,
+  onClose,
 }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -153,8 +157,12 @@ export default function Sidebar({
     handleProjectSelect(project);
   };
 
+  const handleNavClick = () => {
+    if (onClose) onClose();
+  };
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${open ? ' sidebar-open' : ''}`}>
       <div className="sidebar-header">
         <Link to="/" className="sidebar-back-btn">
           <ArrowLeft size={14} />
@@ -278,6 +286,7 @@ export default function Sidebar({
               key={link.to}
               to={link.to}
               className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
+              onClick={handleNavClick}
             >
               <span className="sidebar-link-content">
                 <link.icon size={16} className="sidebar-link-icon" />

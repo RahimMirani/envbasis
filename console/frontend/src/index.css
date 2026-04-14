@@ -1595,3 +1595,164 @@ tbody tr:last-child td { border-bottom: none; }
   .webhook-actions { flex-direction: column; align-items: flex-start; }
   .webhook-delivery-topline .webhook-delivery-time { margin-left: 0; }
 }
+
+/* ==========================================
+   MOBILE (≤768px) — Hamburger drawer layout
+   ========================================== */
+
+/* Hamburger button — hidden on desktop */
+.topbar-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+.topbar-hamburger:hover { color: var(--text-primary); background: var(--accent-subtle); }
+
+/* Mobile global topbar — hidden on desktop */
+.global-mobile-topbar {
+  display: none;
+}
+
+/* Sidebar backdrop overlay */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 299;
+  backdrop-filter: blur(2px);
+}
+
+@media (max-width: 768px) {
+  /* ---- Sidebar: slide-in drawer ---- */
+  .global-sidebar,
+  .sidebar {
+    position: fixed;
+    left: -240px;
+    top: 0;
+    bottom: 0;
+    z-index: 300;
+    width: 230px;
+    transition: left 0.25s ease;
+    overflow-y: auto;
+  }
+  .global-sidebar.sidebar-open,
+  .sidebar.sidebar-open {
+    left: 0;
+  }
+
+  /* Backdrop visible when drawer is open */
+  .sidebar-backdrop {
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+  .sidebar-backdrop.sidebar-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* ---- Layout: remove sidebar offset ---- */
+  .global-layout {
+    flex-direction: column;
+  }
+  .global-layout-main {
+    margin-left: 0;
+    padding: var(--space-5);
+    min-height: auto;
+  }
+  .project-layout-body {
+    padding-left: 0;
+    padding-top: 56px;
+  }
+  .project-layout-main {
+    padding: var(--space-5);
+  }
+
+  /* ---- TopBar: full width, compact layout ---- */
+  .topbar { left: 0; padding: 0 var(--space-3); overflow: hidden; }
+  .topbar-hamburger { display: flex; }
+  .topbar-logo { display: none; }
+  /* Remove env select forced min-width — let it be flexible */
+  .topbar-env-select .select { min-width: 0; width: auto; max-width: 130px; padding-right: 28px; }
+  /* Hide username — just show avatar + sign out */
+  .topbar-username { display: none; }
+  /* Prevent right side from pushing left side off-screen */
+  .topbar-right { flex-shrink: 0; gap: var(--space-2); }
+  .topbar-left { min-width: 0; flex: 1; gap: var(--space-2); overflow: hidden; }
+  /* Truncate breadcrumb text */
+  .topbar-project { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+  .topbar-page { max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+
+  /* ---- Page headers: stack title + actions vertically on small screens ---- */
+  .page-header { flex-direction: column; gap: var(--space-3); }
+  .page-header-actions { flex-shrink: 1; flex-wrap: wrap; }
+
+  /* ---- Global mobile topbar ---- */
+  .global-mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0 var(--space-4);
+    height: 56px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-primary);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .global-mobile-topbar-logo {
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+  }
+
+  /* ---- Stats grids: 2-col on tablet ---- */
+  .overview-stats { grid-template-columns: repeat(2, 1fr); }
+
+  /* ---- Prevent page-level horizontal overflow ---- */
+  .project-layout-main { overflow-x: hidden; }
+  .overview-page,
+  .secrets-page,
+  .environments-page,
+  .team-page,
+  .tokens-page,
+  .webhooks-page,
+  .settings-page,
+  .audit-page { max-width: 100%; }
+
+  /* ---- Tables: horizontal scroll ---- */
+  .table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table { min-width: 560px; }
+
+  /* ---- Modals: bottom sheet ---- */
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .modal-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-height: 90dvh;
+    overflow-y: auto;
+  }
+}
+
+/* ---- Phone-only (≤480px) ---- */
+@media (max-width: 480px) {
+  .overview-stats { grid-template-columns: 1fr; }
+  .global-layout-main { padding: var(--space-4); }
+  .project-layout-main { padding: var(--space-4); }
+}

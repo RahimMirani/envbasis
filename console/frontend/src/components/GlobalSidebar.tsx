@@ -41,7 +41,12 @@ function HackathonModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export default function GlobalSidebar() {
+interface GlobalSidebarProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export default function GlobalSidebar({ open = false, onClose }: GlobalSidebarProps) {
   const navigate = useNavigate();
   const { currentUser, authUser, signOut } = useAuth();
   const user = currentUser ?? authUser;
@@ -52,9 +57,13 @@ export default function GlobalSidebar() {
     navigate('/login');
   };
 
+  const handleNavClick = () => {
+    if (onClose) onClose();
+  };
+
   return (
     <>
-      <aside className="global-sidebar">
+      <aside className={`global-sidebar${open ? ' sidebar-open' : ''}`}>
         <div className="global-sidebar-brand">
           <span className="global-sidebar-logo">envbasis</span>
           <span className="global-sidebar-logo-dot" />
@@ -66,6 +75,7 @@ export default function GlobalSidebar() {
             to="/"
             end
             className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
+            onClick={handleNavClick}
           >
             <LayoutGrid size={16} className="sidebar-link-icon" />
             <span>Projects</span>
@@ -75,6 +85,7 @@ export default function GlobalSidebar() {
           <NavLink
             to="/audit"
             className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
+            onClick={handleNavClick}
           >
             <ScrollText size={16} className="sidebar-link-icon" />
             <span>Audit Logs</span>
@@ -97,6 +108,7 @@ export default function GlobalSidebar() {
           <NavLink
             to="/account"
             className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
+            onClick={handleNavClick}
           >
             <UserCog size={16} className="sidebar-link-icon" />
             <span>Account Settings</span>
