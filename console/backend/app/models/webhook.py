@@ -27,7 +27,8 @@ class Webhook(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     # Per-instance plaintext cache so we decrypt at most once per loaded object,
     # and so we can hand back the plaintext we just set without a round-trip.
-    _signing_secret_plaintext_cache: str | None = None
+    # Stored as a plain instance attribute (not a class-level annotation) so
+    # SQLAlchemy's declarative mapper doesn't try to treat it as a column.
 
     def set_signing_secret(self, plaintext: str) -> None:
         # Local import avoids a circular import at module load time
@@ -39,7 +40,7 @@ class Webhook(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     @property
     def signing_secret(self) -> str:
-        cached = self._signing_secret_plaintext_cache
+        cached = getattr(self, "_signing_secret_plaintext_cache", None)
         if cached is not None:
             return cached
 
