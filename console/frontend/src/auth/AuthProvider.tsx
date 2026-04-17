@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState, ReactNode } from 'react';
 import type { User as SupabaseUser, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { getCurrentUser, getApiConfigError } from '../lib/api';
+import { ApiError, getCurrentUser, getApiConfigError } from '../lib/api';
 import { AuthContext, AuthContextValue } from './AuthContext';
 import type { User } from '../types/api';
+
+function isAuthFailureStatus(status: number | null): boolean {
+  return status === 401 || status === 403;
+}
 
 interface AuthProviderProps {
   children: ReactNode;
@@ -61,10 +65,21 @@ export default function AuthProvider({ children }: AuthProviderProps) {
         if (isActive) {
           setCurrentUser(user);
         }
-      } catch {
-        if (isActive) {
-          setCurrentUser(null);
+      } catch (error) {
+        if (!isActive) {
+          return;
         }
+
+        const status = error instanceof ApiError ? error.status : null;
+        if (isAuthFailureStatus(status)) {
+          setCurrentUser(null);
+          return;
+        }
+
+        // Transient failure (network / 5xx). Keep any existing currentUser in
+        // place so a backend hiccup doesn't look like a silent sign-out.
+        // eslint-disable-next-line no-console
+        console.error('Failed to load current user', error);
       }
     }
 
