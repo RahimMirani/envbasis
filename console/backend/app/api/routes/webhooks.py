@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import ProjectAccess, get_current_user, require_project_owner
@@ -26,6 +28,8 @@ from app.services.webhooks import (
     list_webhook_deliveries,
     send_test_webhook,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects")
 
@@ -55,13 +59,14 @@ def _get_project_webhook_or_404(
                 Webhook.project_id == project_id,
             )
         )
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         if is_missing_webhooks_table(exc):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Webhooks are unavailable until the latest database migration is applied.",
             ) from exc
+        logger.exception("Database error while loading webhook %s", webhook_id)
         raise
 
     if webhook is None:
@@ -99,13 +104,14 @@ def create_webhook(
     db.add(webhook)
     try:
         db.flush()
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         if is_missing_webhooks_table(exc):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Webhooks are unavailable until the latest database migration is applied.",
             ) from exc
+        logger.exception("Database error while creating webhook for project %s", project_access.project.id)
         raise
     write_audit_log(
         db,
@@ -132,10 +138,11 @@ def list_webhooks(
                 .order_by(Webhook.created_at.asc())
             ).all()
         )
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         if is_missing_webhooks_table(exc):
             return []
+        logger.exception("Database error while listing webhooks for project %s", project_access.project.id)
         raise
 
     latest_by_webhook = {}
@@ -145,9 +152,13 @@ def list_webhooks(
                 db,
                 webhook_ids=[webhook.id for webhook in webhooks],
             )
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             db.rollback()
             if not is_missing_webhook_deliveries_table(exc):
+                logger.exception(
+                    "Database error while loading latest webhook deliveries for project %s",
+                    project_access.project.id,
+                )
                 raise
 
     return [_serialize_webhook(webhook, latest_by_webhook.get(webhook.id)) for webhook in webhooks]
@@ -178,13 +189,14 @@ def list_webhook_delivery_history(
 
     try:
         deliveries = list_webhook_deliveries(db, webhook_id=webhook_id, limit=limit)
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         if is_missing_webhook_deliveries_table(exc):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Webhook delivery tracking is unavailable until the latest database migration is applied.",
             ) from exc
+        logger.exception("Database error while listing deliveries for webhook %s", webhook_id)
         raise
 
     return [_serialize_delivery(delivery) for delivery in deliveries]
@@ -212,13 +224,14 @@ def test_webhook(
             webhook=webhook,
             triggered_by=current_user.id,
         )
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         if is_missing_webhook_deliveries_table(exc):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Webhook delivery tracking is unavailable until the latest database migration is applied.",
             ) from exc
+        logger.exception("Database error while sending test webhook %s", webhook_id)
         raise
 
     write_audit_log(
