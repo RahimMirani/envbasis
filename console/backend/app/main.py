@@ -13,6 +13,7 @@ from app.core.middleware import (
 )
 from app.db.session import SessionLocal
 from app.services.audit import cleanup_old_audit_logs
+from app.services.crypto import ensure_secrets_master_key_configured
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,10 @@ def create_app() -> FastAPI:
             allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
         )
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    @app.on_event("startup")
+    def validate_encryption_key_on_startup() -> None:
+        ensure_secrets_master_key_configured()
 
     @app.on_event("startup")
     def cleanup_audit_logs_on_startup() -> None:
