@@ -98,9 +98,9 @@ def create_webhook(
         project_id=project_access.project.id,
         url=url,
         events=payload.events,
-        signing_secret=signing_secret,
         created_by=current_user.id,
     )
+    webhook.set_signing_secret(signing_secret)
     db.add(webhook)
     try:
         db.flush()
