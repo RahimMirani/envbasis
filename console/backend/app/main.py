@@ -2,6 +2,7 @@ import logging
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.api.router import api_router
 from app.core.config import settings
@@ -54,9 +55,12 @@ def create_app() -> FastAPI:
         try:
             cleanup_old_audit_logs(db, retention_days=settings.audit_log_retention_days)
             db.commit()
-        except Exception:
+        except (OperationalError, ProgrammingError):
+            # DB isn't reachable yet or migrations haven't been applied — safe
+            # to skip and let the app boot. Any other error is a real bug and
+            # should propagate so boot fails loudly.
             db.rollback()
-            logger.warning("Startup cleanup skipped because the database is not ready.", exc_info=True)
+            logger.warning("Startup audit-log cleanup skipped: database not ready.", exc_info=True)
         finally:
             db.close()
 
