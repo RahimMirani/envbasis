@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
 import app.services.webhooks as webhook_service
 from app.api.deps import ProjectAccess
 from app.api.routes.webhooks import (
@@ -10,7 +12,9 @@ from app.api.routes.webhooks import (
     list_webhooks,
     test_webhook as trigger_webhook_test,
 )
+from app.models.webhook import Webhook
 from app.schemas.webhook import WebhookCreate
+from app.services.crypto import decrypt_text
 
 
 def test_webhook_create_list_delete_and_list_events(session_factory, seeder) -> None:
@@ -66,6 +70,43 @@ def test_webhook_create_list_delete_and_list_events(session_factory, seeder) -> 
 
     assert webhooks == []
     assert seeder.audit_actions(project) == ["webhook.created", "webhook.deleted"]
+
+
+def test_webhook_signing_secret_is_stored_encrypted(session_factory, seeder) -> None:
+    owner = seeder.user("owner-webhook-crypto@example.com")
+    project = seeder.project(owner, name="webhook-crypto")
+    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+
+    with session_factory() as db:
+        created = create_webhook(
+            payload=WebhookCreate(
+                url="https://example.com/hooks/crypto",
+                events=["secret.created"],
+            ),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    plaintext = created.signing_secret
+    assert len(plaintext) == 64
+
+    # Read the raw ciphertext column directly in a fresh session so we bypass
+    # the plaintext cache on the object that created the row.
+    with session_factory() as db:
+        stored_ciphertext = db.scalar(
+            select(Webhook.signing_secret_ciphertext).where(Webhook.id == created.id)
+        )
+
+    assert isinstance(stored_ciphertext, (bytes, bytearray))
+    assert plaintext.encode("utf-8") not in stored_ciphertext
+    assert decrypt_text(stored_ciphertext) == plaintext
+
+    # Loading the model through ORM decrypts transparently via the property.
+    with session_factory() as db:
+        reloaded = db.scalar(select(Webhook).where(Webhook.id == created.id))
+        assert reloaded is not None
+        assert reloaded.signing_secret == plaintext
 
 
 def test_webhook_test_delivery_history_and_latest_status(
