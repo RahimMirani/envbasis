@@ -12,6 +12,7 @@ class Endpoint(StrEnum):
     CLI_AUTH_TOKEN = "/cli/auth/token"
     CLI_AUTH_REFRESH = "/cli/auth/refresh"
     CLI_AUTH_LOGOUT = "/cli/auth/logout"
+    MACHINE_AUTH_TOKEN = "/machine-identities/token"
     PROJECTS = "/projects"
     PROJECT_DETAIL = "/projects/{project_id}"
     ENVIRONMENTS = "/projects/{project_id}/environments"
@@ -57,6 +58,13 @@ class ErrorPayload(BaseModel):
 class UserProfile(BaseModel):
     id: str
     email: str
+
+
+class MachineTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    expires_at: str
 
 
 class ProjectSummary(BaseModel):
