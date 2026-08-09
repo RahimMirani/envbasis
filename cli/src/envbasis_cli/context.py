@@ -26,6 +26,7 @@ class AppContext:
     local_config: LocalConfig
     auth_manager: AuthManager
     output: OutputManager
+    config_error: str | None = None
 
     @property
     def resolved_api_url(self) -> str | None:
