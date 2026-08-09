@@ -113,6 +113,30 @@ def test_login_prints_code_and_url_and_persists_session(monkeypatch, tmp_path) -
     assert 'api_base_url = "https://api.example.com/api/v1"' in config_text
 
 
+def test_universal_auth_login_plain_prints_only_short_lived_token(monkeypatch, tmp_path) -> None:
+    _wire_main_dependencies(monkeypatch, tmp_path)
+
+    def fake_request(self, method, url, params=None, json=None, headers=None):
+        request = httpx.Request(method, url, headers=headers, json=json)
+        assert url == "https://api.example.com/api/v1/machine-identities/token"
+        assert json == {"client_id": "envb_mi_test", "client_secret": "super-secret"}
+        return httpx.Response(200, json={"access_token": "short-lived-token", "token_type": "Bearer", "expires_in": 600, "expires_at": "2030-01-01T00:00:00Z"}, request=request)
+
+    monkeypatch.setattr(httpx.Client, "request", fake_request)
+    result = CliRunner().invoke(app, ["--api-url", "https://api.example.com/api/v1", "login", "--method", "universal-auth", "--client-id", "envb_mi_test", "--client-secret", "super-secret", "--plain"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "short-lived-token"
+    assert "super-secret" not in result.output
+
+
+def test_envbasis_token_overrides_keyring_session(monkeypatch) -> None:
+    monkeypatch.setenv("ENVBASIS_TOKEN", "deployment-token")
+    manager = AuthManager()
+    assert manager.get_valid_access_token("https://api.example.com/api/v1") == "deployment-token"
+    assert manager.needs_refresh() is False
+
+
 def test_login_continues_when_browser_open_fails(monkeypatch, tmp_path) -> None:
     fake_keyring = FakeKeyring()
     _wire_main_dependencies(monkeypatch, tmp_path)
