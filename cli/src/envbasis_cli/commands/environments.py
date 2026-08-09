@@ -73,8 +73,7 @@ def create_environment(
     app_context.output.success(f"Created environment {environment.name}")
 
 
-@app.command("use")
-def use_environment(
+def select_environment(
     ctx: typer.Context,
     environment_reference: Annotated[str, typer.Argument(help="Environment name or ID.")],
 ) -> None:
