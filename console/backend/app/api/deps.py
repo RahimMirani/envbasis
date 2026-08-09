@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
+from app.services.audit import write_audit_log
 
 ROLE_OWNER = "owner"
 ROLE_MEMBER = "member"
@@ -25,6 +26,9 @@ class ProjectAccess:
     project: Project
     role: str
     can_push_pull_secrets: bool
+    can_manage_runtime_tokens: bool
+    can_manage_team: bool
+    can_view_audit_logs: bool
 
 
 def _resolve_identity(
@@ -88,7 +92,14 @@ def get_project_access(
         )
 
     if project.owner_id == current_user.id:
-        return ProjectAccess(project=project, role=ROLE_OWNER, can_push_pull_secrets=True)
+        return ProjectAccess(
+            project=project,
+            role=ROLE_OWNER,
+            can_push_pull_secrets=True,
+            can_manage_runtime_tokens=True,
+            can_manage_team=True,
+            can_view_audit_logs=True,
+        )
 
     membership = db.scalar(
         select(ProjectMember).where(
@@ -102,10 +113,20 @@ def get_project_access(
             detail="You do not have access to this project.",
         )
 
+    if project.audit_log_visibility == "members":
+        can_view_audit_logs = True
+    elif project.audit_log_visibility == "specific":
+        can_view_audit_logs = membership.can_view_audit_logs
+    else:
+        can_view_audit_logs = False
+
     return ProjectAccess(
         project=project,
         role=membership.role,
         can_push_pull_secrets=membership.can_push_pull_secrets,
+        can_manage_runtime_tokens=membership.can_manage_runtime_tokens,
+        can_manage_team=membership.can_manage_team,
+        can_view_audit_logs=can_view_audit_logs,
     )
 
 
@@ -119,11 +140,55 @@ def require_project_owner(project_access: ProjectAccess = Depends(get_project_ac
     return project_access
 
 
-def require_secret_access(project_access: ProjectAccess = Depends(get_project_access)) -> ProjectAccess:
+def require_secret_management(project_access: ProjectAccess = Depends(get_project_access)) -> ProjectAccess:
     if project_access.role == ROLE_OWNER or project_access.can_push_pull_secrets:
         return project_access
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have push/pull access to this project's secrets.",
+        detail="You do not have permission to manage this project's secrets.",
+    )
+
+
+def require_runtime_token_management(project_access: ProjectAccess = Depends(get_project_access)) -> ProjectAccess:
+    if project_access.role == ROLE_OWNER or project_access.can_manage_runtime_tokens:
+        return project_access
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to manage this project's runtime tokens.",
+    )
+
+
+def require_team_management(project_access: ProjectAccess = Depends(get_project_access)) -> ProjectAccess:
+    if project_access.role == ROLE_OWNER or project_access.can_manage_team:
+        return project_access
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to manage this project's team.",
+    )
+
+
+def require_audit_log_access(
+    project_access: ProjectAccess = Depends(get_project_access),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectAccess:
+    if project_access.role == ROLE_OWNER or project_access.can_view_audit_logs:
+        return project_access
+
+    if project_access.role == ROLE_MEMBER:
+        write_audit_log(
+            db,
+            project_id=project_access.project.id,
+            user_id=current_user.id,
+            action="audit_logs.access_denied",
+            metadata={"reason": "visibility"},
+        )
+        db.commit()
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to view this project's audit logs.",
     )

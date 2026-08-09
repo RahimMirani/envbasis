@@ -20,7 +20,24 @@ from envbasis_cli.contracts import (
     build_path,
 )
 
-app = typer.Typer(help="Manage the active project.")
+app = typer.Typer(
+    help="Select or manage the active project.",
+    invoke_without_command=True,
+    no_args_is_help=True,
+)
+
+
+@app.callback()
+def select_project_shortcut(
+    ctx: typer.Context,
+    project_reference: Annotated[
+        str | None,
+        typer.Option("--select", "--name", help="Select the active project by name or ID."),
+    ] = None,
+) -> None:
+    if ctx.invoked_subcommand is not None or project_reference is None:
+        return
+    _select_project(ctx, project_reference)
 
 
 @app.command("create")
@@ -83,8 +100,7 @@ def show_project(ctx: typer.Context) -> None:
     app_context.output.table("Project", ["Field", "Value"], rows)
 
 
-@app.command("use")
-def use_project(
+def _select_project(
     ctx: typer.Context,
     project_reference: Annotated[str, typer.Argument(help="Project name or ID.")],
 ) -> None:

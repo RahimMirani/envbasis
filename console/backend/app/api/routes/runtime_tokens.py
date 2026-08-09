@@ -7,7 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import ProjectAccess, ROLE_OWNER, get_current_user, get_project_access, require_project_owner
+from app.api.deps import (
+    ProjectAccess,
+    ROLE_OWNER,
+    get_current_user,
+    get_project_access,
+    require_runtime_token_management,
+)
 from app.db.session import get_db
 from app.models.project import Project
 from app.models.project_member import ProjectMember
@@ -82,30 +88,6 @@ def _get_active_runtime_token_by_name_or_404(
     return token
 
 
-def _user_can_access_runtime_token(
-    db: Session,
-    *,
-    token: RuntimeToken,
-    current_user: User,
-) -> bool:
-    project = db.get(Project, token.project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found.",
-        )
-
-    if project.owner_id == current_user.id:
-        return True
-
-    return db.scalar(
-        select(RuntimeTokenShare).where(
-            RuntimeTokenShare.runtime_token_id == token.id,
-            RuntimeTokenShare.user_id == current_user.id,
-        )
-    ) is not None
-
-
 @router.post(
     "/projects/{project_id}/environments/{environment_id}/runtime-tokens",
     response_model=RuntimeTokenCreateResponse,
@@ -115,7 +97,7 @@ def create_runtime_token(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     payload: RuntimeTokenCreateRequest,
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_runtime_token_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RuntimeTokenCreateResponse:
@@ -200,7 +182,7 @@ def list_runtime_tokens(
     if project_id != project_access.project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
-    if project_access.role == ROLE_OWNER:
+    if project_access.role == ROLE_OWNER or project_access.can_manage_runtime_tokens:
         tokens = db.scalars(
             select(RuntimeToken)
             .where(RuntimeToken.project_id == project_access.project.id)
@@ -219,33 +201,38 @@ def list_runtime_tokens(
     return [_serialize_runtime_token(token) for token in tokens]
 
 
-@router.post("/runtime-tokens/{token_id}/share", response_model=RuntimeTokenShareRead, status_code=status.HTTP_201_CREATED)
-def share_runtime_token(
+def _get_token_in_project_or_404(
+    db: Session,
+    *,
     token_id: uuid.UUID,
-    payload: RuntimeTokenShareRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> RuntimeTokenShareRead:
+    project_id: uuid.UUID,
+) -> RuntimeToken:
     token = db.get(RuntimeToken, token_id)
-    if token is None:
+    if token is None or token.project_id != project_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Runtime token not found.",
         )
+    return token
 
-    project = db.get(Project, token.project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found.",
-        )
 
-    if project.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only project owners can share runtime tokens.",
-        )
+@router.post(
+    "/projects/{project_id}/runtime-tokens/{token_id}/share",
+    response_model=RuntimeTokenShareRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def share_runtime_token(
+    project_id: uuid.UUID,
+    token_id: uuid.UUID,
+    payload: RuntimeTokenShareRequest,
+    project_access: ProjectAccess = Depends(require_runtime_token_management),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RuntimeTokenShareRead:
+    if project_id != project_access.project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
+    token = _get_token_in_project_or_404(db, token_id=token_id, project_id=project_access.project.id)
     _ensure_shareable_runtime_token(token)
 
     recipient_email = payload.email.strip().lower()
@@ -262,14 +249,13 @@ def share_runtime_token(
             detail="Project owners already have access to this runtime token.",
         )
 
-    # Recipient must already be part of the project.
-    membership = db.scalar(
+    recipient_membership = db.scalar(
         select(ProjectMember).where(
-            ProjectMember.project_id == project.id,
+            ProjectMember.project_id == project_access.project.id,
             ProjectMember.user_id == recipient.id,
         )
     )
-    if membership is None:
+    if recipient_membership is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Runtime tokens can only be shared with project members.",
@@ -291,16 +277,17 @@ def share_runtime_token(
         runtime_token_id=token.id,
         user_id=recipient.id,
         shared_by=current_user.id,
+        can_manage=payload.can_manage,
     )
     db.add(share)
     db.flush()
     write_audit_log(
         db,
-        project_id=project.id,
+        project_id=project_access.project.id,
         environment_id=token.environment_id,
         user_id=current_user.id,
         action="runtime_token.shared",
-        metadata={"token_id": str(token.id), "member_email": recipient.email},
+        metadata={"token_id": str(token.id), "member_email": recipient.email, "can_manage": payload.can_manage},
     )
     db.commit()
     db.refresh(share)
@@ -310,35 +297,25 @@ def share_runtime_token(
         user_id=share.user_id,
         email=recipient.email,
         shared_by=share.shared_by,
+        can_manage=share.can_manage,
         created_at=share.created_at,
     )
 
 
-@router.get("/runtime-tokens/{token_id}/shares", response_model=list[RuntimeTokenShareRead])
+@router.get(
+    "/projects/{project_id}/runtime-tokens/{token_id}/shares",
+    response_model=list[RuntimeTokenShareRead],
+)
 def list_runtime_token_shares(
+    project_id: uuid.UUID,
     token_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    project_access: ProjectAccess = Depends(require_runtime_token_management),
     db: Session = Depends(get_db),
 ) -> list[RuntimeTokenShareRead]:
-    token = db.get(RuntimeToken, token_id)
-    if token is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Runtime token not found.",
-        )
+    if project_id != project_access.project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
-    project = db.get(Project, token.project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found.",
-        )
-
-    if project.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only project owners can view runtime token shares.",
-        )
+    token = _get_token_in_project_or_404(db, token_id=token_id, project_id=project_access.project.id)
 
     rows = db.execute(
         select(RuntimeTokenShare, User.email)
@@ -353,6 +330,7 @@ def list_runtime_token_shares(
             user_id=share.user_id,
             email=email,
             shared_by=share.shared_by,
+            can_manage=share.can_manage,
             created_at=share.created_at,
         )
         for share, email in rows
@@ -381,11 +359,18 @@ def reveal_runtime_token_by_name(
         name=name,
     )
 
-    if not _user_can_access_runtime_token(db, token=token, current_user=current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this runtime token.",
+    if project_access.role != ROLE_OWNER and not project_access.can_manage_runtime_tokens:
+        share = db.scalar(
+            select(RuntimeTokenShare).where(
+                RuntimeTokenShare.runtime_token_id == token.id,
+                RuntimeTokenShare.user_id == current_user.id,
+            )
         )
+        if share is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this runtime token.",
+            )
 
     _ensure_shareable_runtime_token(token)
 
@@ -413,7 +398,7 @@ def reveal_runtime_token_by_name(
 def revoke_runtime_token_by_name(
     project_id: uuid.UUID,
     payload: RuntimeTokenNameRequest,
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(get_project_access),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
@@ -426,6 +411,20 @@ def revoke_runtime_token_by_name(
         project_id=project_access.project.id,
         name=name,
     )
+
+    if project_access.role != ROLE_OWNER and not project_access.can_manage_runtime_tokens:
+        share = db.scalar(
+            select(RuntimeTokenShare).where(
+                RuntimeTokenShare.runtime_token_id == token.id,
+                RuntimeTokenShare.user_id == current_user.id,
+                RuntimeTokenShare.can_manage.is_(True),
+            )
+        )
+        if share is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to manage this runtime token.",
+            )
 
     write_audit_log(
         db,
@@ -466,11 +465,30 @@ def reveal_runtime_token(
             detail="Project not found.",
         )
 
-    if not _user_can_access_runtime_token(db, token=token, current_user=current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this runtime token.",
+    if project.owner_id != current_user.id:
+        membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == current_user.id,
+            )
         )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this runtime token.",
+            )
+        if not membership.can_manage_runtime_tokens:
+            share = db.scalar(
+                select(RuntimeTokenShare).where(
+                    RuntimeTokenShare.runtime_token_id == token.id,
+                    RuntimeTokenShare.user_id == current_user.id,
+                )
+            )
+            if share is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this runtime token.",
+                )
 
     _ensure_shareable_runtime_token(token)
 
@@ -512,10 +530,30 @@ def revoke_runtime_token(
         )
 
     if project.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only project owners can perform this action.",
+        membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == current_user.id,
+            )
         )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to manage this project's runtime tokens.",
+            )
+        if not membership.can_manage_runtime_tokens:
+            share = db.scalar(
+                select(RuntimeTokenShare).where(
+                    RuntimeTokenShare.runtime_token_id == token.id,
+                    RuntimeTokenShare.user_id == current_user.id,
+                    RuntimeTokenShare.can_manage.is_(True),
+                )
+            )
+            if share is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to manage this runtime token.",
+                )
 
     write_audit_log(
         db,

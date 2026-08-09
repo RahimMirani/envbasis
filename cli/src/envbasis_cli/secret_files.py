@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import shlex
 import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +51,10 @@ def render_secret_payload(secrets: Mapping[str, str], output_format: str) -> str
         return json.dumps(dict(secrets), indent=2, sort_keys=True) + "\n"
     if output_format == "dotenv":
         return render_dotenv(secrets)
+    if output_format == "yaml":
+        return render_yaml(secrets)
+    if output_format == "shell":
+        return render_shell(secrets)
     raise ValueError(f"Unsupported secret output format: {output_format}")
 
 
@@ -85,7 +93,27 @@ def build_secret_review(remote_secrets: Mapping[str, str], local_secrets: Mappin
 
 def write_secret_file(path: Path, secrets: Mapping[str, str], output_format: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_secret_payload(secrets, output_format), encoding="utf-8")
+    content = render_secret_payload(secrets, output_format)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file_obj:
+            file_obj.write(content)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+            temporary_path = Path(file_obj.name)
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, path)
+    except OSError:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def git_safety_warnings(path: Path) -> list[str]:
@@ -132,6 +160,22 @@ def render_dotenv(secrets: Mapping[str, str]) -> str:
     lines = []
     for key in sorted(secrets):
         lines.append(f"{key}={_format_dotenv_value(secrets[key])}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def render_yaml(secrets: Mapping[str, str]) -> str:
+    lines = [
+        f"{json.dumps(str(key), ensure_ascii=False)}: {json.dumps(value, ensure_ascii=False)}"
+        for key, value in sorted(secrets.items())
+    ]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def render_shell(secrets: Mapping[str, str]) -> str:
+    invalid_keys = [key for key in secrets if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None]
+    if invalid_keys:
+        raise ValueError(f"Cannot export invalid shell variable name: {sorted(invalid_keys)[0]}")
+    lines = [f"export {key}={shlex.quote(value)}" for key, value in sorted(secrets.items())]
     return "\n".join(lines) + ("\n" if lines else "")
 
 

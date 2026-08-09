@@ -87,3 +87,13 @@ For self-hosting the dashboard + backend (Supabase Postgres, Google OAuth, Ferne
 EnvBasis is open-source and under active development. The core flows — project/environment management, secret CRUD, runtime tokens, member invitations, audit logs, webhooks, and CLI sign-in — are shipping. Features still on the roadmap (multi-region, SDKs, additional OAuth providers, fine-grained RBAC) are tracked as issues.
 
 Contributions, bug reports, and feature requests are welcome via GitHub issues and pull requests.
+
+## Security documentation
+
+- [Permission model](docs/PERMISSIONS.md)
+- [Encryption model and rotation](docs/ENCRYPTION.md)
+- [Compromise impact and response](docs/SECURITY_COMPROMISES.md)
+- [Machine identities and short-lived access](docs/MACHINE_IDENTITIES.md)
+- [Webhook security and durable delivery](docs/WEBHOOKS.md)
+- [API operations, Redis, logs, metrics, and probes](docs/API_OPERATIONS.md)
+- [API versioning and deprecation policy](docs/API_VERSIONING.md)

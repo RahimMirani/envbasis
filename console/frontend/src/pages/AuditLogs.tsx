@@ -11,7 +11,7 @@ import {
   LucideIcon,
   X,
 } from 'lucide-react';
-import { useOutletContext } from 'react-router-dom';
+import { Navigate, useOutletContext } from 'react-router-dom';
 import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs, downloadAuditLogs } from '../lib/api';
@@ -97,6 +97,10 @@ export default function AuditLogsPage() {
   const [filterAction, setFilterAction] = useState('all');
   const [filterEnv, setFilterEnv] = useState(currentEnv === 'all' ? 'all' : currentEnv);
   const [isExporting, setIsExporting] = useState(false);
+
+  if (!currentProject.can_view_audit_logs) {
+    return <Navigate to={`/projects/${currentProject.id}/overview`} replace />;
+  }
 
   useEffect(() => {
     setFilterEnv(currentEnv === 'all' ? 'all' : currentEnv);

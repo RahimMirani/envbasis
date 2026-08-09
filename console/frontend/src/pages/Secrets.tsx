@@ -24,7 +24,6 @@ import {
   createSecret,
   deleteSecret,
   isAbortError,
-  listMembers,
   listProjectSecrets,
   pullSecrets,
   pushSecrets,
@@ -36,7 +35,7 @@ import { parseDotenv, serializeDotenv } from '../lib/dotenv';
 import { formatDate, formatRelativeTime } from '../lib/format';
 import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getDefaultEnvironmentId } from '../lib/secrets';
-import type { Project, Environment, Secret, ProjectSecret, Member } from '../types/api';
+import type { Project, Environment, Secret, ProjectSecret } from '../types/api';
 
 interface OutletContextType {
   currentEnv: string;
@@ -65,10 +64,6 @@ interface SecretsQueryCacheEntry {
   secrets: SecretWithEnv[];
   nextCursor: string | null;
   cachedAt: number;
-}
-
-interface TeamCacheEntry {
-  members: Member[];
 }
 
 interface UploadResult {
@@ -176,8 +171,8 @@ function formatSecretExpiry(expiresAt: string | null): string {
 export default function SecretsPage() {
   const { currentEnv, currentProject, environments, pageCache, refreshSecretStats } =
     useOutletContext<OutletContextType>();
-  const { accessToken, apiConfigError, currentUser, authUser } = useAuth();
-  const membershipEmail = currentUser?.email ?? authUser?.email ?? null;
+  const { accessToken, apiConfigError } = useAuth();
+  const canManageSecrets = currentProject.can_manage_secrets;
   const initialVisibleEnvironments =
     currentEnv === 'all'
       ? environments
@@ -186,8 +181,6 @@ export default function SecretsPage() {
     .map((environment) => environment.id)
     .sort();
   const secretsPageCacheKey = `secrets:queries:${currentProject.id}`;
-  const teamCacheKey = `team:${currentProject.id}`;
-  const accessCacheKey = `secrets:access:${currentProject.id}:${String(membershipEmail ?? 'anon').toLowerCase()}`;
   const initialSecretsCache =
     pageCache.get<Map<string, SecretsQueryCacheEntry>>(secretsPageCacheKey) ?? new Map();
   const initialSecretsQueryKey = buildSecretsQueryKey(
@@ -196,26 +189,12 @@ export default function SecretsPage() {
     ''
   );
   const initialSecretsEntry = initialSecretsCache.get(initialSecretsQueryKey);
-  const cachedTeam = pageCache.get<TeamCacheEntry>(teamCacheKey);
-  const initialSecretAccessState: 'enabled' | 'checking' | 'disabled' =
-    currentProject.role === 'owner'
-      ? 'enabled'
-      : cachedTeam && membershipEmail
-        ? cachedTeam.members.find(
-            (member) =>
-              String(member.email || '').toLowerCase() === String(membershipEmail || '').toLowerCase()
-          )?.can_push_pull_secrets === false
-          ? 'disabled'
-          : 'enabled'
-        : pageCache.get<'enabled' | 'checking' | 'disabled'>(accessCacheKey) ??
-          (membershipEmail ? 'checking' : 'enabled');
+  const initialSecretAccessState: 'enabled' | 'checking' | 'disabled' = 'enabled';
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [secrets, setSecrets] = useState<SecretWithEnv[]>(() => initialSecretsEntry?.secrets ?? []);
   const [nextCursor, setNextCursor] = useState<string | null>(() => initialSecretsEntry?.nextCursor ?? null);
-  const [isLoading, setIsLoading] = useState(
-    () => initialSecretAccessState !== 'disabled' && !initialSecretsEntry
-  );
+  const [isLoading, setIsLoading] = useState(() => !initialSecretsEntry);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [secretAccessState, setSecretAccessState] = useState<'enabled' | 'checking' | 'disabled'>(
@@ -284,80 +263,8 @@ export default function SecretsPage() {
   }, [search]);
 
   useEffect(() => {
-    if (!accessToken || apiConfigError) {
-      return undefined;
-    }
-
-    if (currentProject.role === 'owner') {
-      setSecretAccessState('enabled');
-      pageCache.set(accessCacheKey, 'enabled');
-      return undefined;
-    }
-
-    if (!membershipEmail) {
-      setSecretAccessState('enabled');
-      pageCache.set(accessCacheKey, 'enabled');
-      return undefined;
-    }
-
-    const cachedTeamMembers = pageCache.get<TeamCacheEntry>(teamCacheKey)?.members;
-    if (cachedTeamMembers) {
-      const cachedMembership = cachedTeamMembers.find(
-        (member) =>
-          String(member.email || '').toLowerCase() === String(membershipEmail || '').toLowerCase()
-      );
-      const nextState =
-        cachedMembership && cachedMembership.can_push_pull_secrets === false
-          ? 'disabled'
-          : 'enabled';
-      setSecretAccessState(nextState);
-      pageCache.set(accessCacheKey, nextState);
-      return undefined;
-    }
-
-    let isActive = true;
-    const controller = new AbortController();
-    setSecretAccessState('checking');
-
-    async function loadSecretAccess() {
-      try {
-        const members = await listMembers(currentProject.id, accessToken!, {
-          signal: controller.signal,
-        });
-
-        if (!isActive) {
-          return;
-        }
-
-        const membership = members.find(
-          (member) =>
-            String(member.email || '').toLowerCase() ===
-            String(membershipEmail || '').toLowerCase()
-        );
-
-        setSecretAccessState(
-          membership && membership.can_push_pull_secrets === false ? 'disabled' : 'enabled'
-        );
-        pageCache.set<TeamCacheEntry>(teamCacheKey, { members });
-        pageCache.set(
-          accessCacheKey,
-          membership && membership.can_push_pull_secrets === false ? 'disabled' : 'enabled'
-        );
-      } catch {
-        if (isActive && !controller.signal.aborted) {
-          setSecretAccessState('enabled');
-          pageCache.set(accessCacheKey, 'enabled');
-        }
-      }
-    }
-
-    void loadSecretAccess();
-
-    return () => {
-      isActive = false;
-      controller.abort();
-    };
-  }, [accessCacheKey, accessToken, apiConfigError, currentProject.id, currentProject.role, membershipEmail, pageCache, teamCacheKey]);
+    setSecretAccessState('enabled');
+  }, [currentProject.id]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -441,8 +348,6 @@ export default function SecretsPage() {
 
         const apiError = loadError as ApiError;
         if (apiError.status === 403) {
-          setSecretAccessState('disabled');
-          pageCache.set(accessCacheKey, 'disabled');
           setError(null);
           setSecrets([]);
           setNextCursor(null);
@@ -493,8 +398,6 @@ export default function SecretsPage() {
     filteredSecretIds.length > 0 && filteredSecretIds.every((secretId) => selectedSecretIds.includes(secretId));
 
   const defaultEnvironmentId = getDefaultEnvironmentId(currentEnv, environments);
-  const canUseSecrets = secretAccessState === 'enabled';
-  const isSecretAccessDenied = secretAccessState === 'disabled';
   const cliEnvironmentName =
     currentEnv === 'all' ? environments[0]?.name || 'dev' : currentEnv;
 
@@ -1062,7 +965,7 @@ export default function SecretsPage() {
           <button
             className="btn btn-danger"
             onClick={() => setShowBulkDeleteConfirm(true)}
-            disabled={!canUseSecrets || selectedSecrets.length === 0 || isBulkDeleting}
+            disabled={!canManageSecrets || selectedSecrets.length === 0 || isBulkDeleting}
           >
             <Trash2 size={14} />
             Delete Selected
@@ -1071,7 +974,7 @@ export default function SecretsPage() {
             className="btn btn-secondary"
             id="bulk-download-btn"
             onClick={openExportModal}
-            disabled={!canUseSecrets || environments.length === 0}
+            disabled={environments.length === 0}
           >
             <Download size={14} />
             Download .env
@@ -1080,7 +983,7 @@ export default function SecretsPage() {
             className="btn btn-secondary"
             id="bulk-upload-btn"
             onClick={openUploadModal}
-            disabled={!canUseSecrets || visibleEnvironments.length === 0}
+            disabled={!canManageSecrets || visibleEnvironments.length === 0}
           >
             <Upload size={14} />
             Upload .env
@@ -1089,7 +992,7 @@ export default function SecretsPage() {
             className="btn btn-primary"
             onClick={openCreateModal}
             id="add-secret-btn"
-            disabled={!canUseSecrets || visibleEnvironments.length === 0}
+            disabled={!canManageSecrets || visibleEnvironments.length === 0}
           >
             <Plus size={14} />
             Add Secret
@@ -1097,10 +1000,10 @@ export default function SecretsPage() {
         </div>
       </div>
 
-      {isSecretAccessDenied && (
+      {!canManageSecrets && (
         <p className="secrets-note">
-          Secret values are disabled for your membership. A project owner can re-enable push/pull
-          access from the Team page.
+          You can view and export secrets, but only permitted managers can create, edit, upload,
+          or delete them.
         </p>
       )}
 
@@ -1164,15 +1067,7 @@ export default function SecretsPage() {
         </div>
       </div>
 
-      {isSecretAccessDenied ? (
-        <div className="empty-state">
-          <h3>Secret access is disabled</h3>
-          <p>
-            You can stay in the project and view project metadata, but secret values and secret
-            mutations are currently restricted for your account.
-          </p>
-        </div>
-      ) : visibleEnvironments.length === 0 ? (
+      {visibleEnvironments.length === 0 ? (
         <div className="empty-state">
           <h3>No environments available</h3>
           <p>Create an environment first before adding secrets.</p>
@@ -1189,10 +1084,12 @@ export default function SecretsPage() {
                 ? 'Add a secret to any environment in this project.'
                 : `Add a secret to ${currentEnv}.`}
           </p>
-          <button className="btn btn-primary" onClick={openCreateModal}>
-            <Plus size={14} />
-            Add Secret
-          </button>
+          {canManageSecrets && (
+            <button className="btn btn-primary" onClick={openCreateModal}>
+              <Plus size={14} />
+              Add Secret
+            </button>
+          )}
         </div>
       ) : (
         <div className="card">
@@ -1206,7 +1103,7 @@ export default function SecretsPage() {
                       indeterminate={selectedSecretIds.length > 0 && !allVisibleSelected}
                       onChange={toggleSelectAllVisibleSecrets}
                       aria-label="Select all visible secrets"
-                      disabled={!canUseSecrets || isBulkDeleting}
+                      disabled={!canManageSecrets || isBulkDeleting}
                     />
                   </th>
                   <th>Key</th>
@@ -1235,7 +1132,7 @@ export default function SecretsPage() {
                           checked={selectedSecretIds.includes(secretId)}
                           onChange={() => toggleSecretSelection(secretId)}
                           aria-label={`Select secret ${secret.key}`}
-                          disabled={!canUseSecrets || isBulkDeleting}
+                          disabled={!canManageSecrets || isBulkDeleting}
                         />
                       </td>
                       <td>
@@ -1283,24 +1180,28 @@ export default function SecretsPage() {
                               <Copy size={14} />
                             )}
                           </button>
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={() => void openEditModal(secret)}
-                            data-tooltip="Edit"
-                            aria-label="Edit secret"
-                            disabled={isBusy}
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm btn-danger-subtle"
-                            onClick={() => setSecretPendingDelete(secret)}
-                            data-tooltip="Delete"
-                            aria-label="Delete secret"
-                            disabled={isBusy}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {canManageSecrets && (
+                            <button
+                              className="btn btn-ghost btn-icon btn-sm"
+                              onClick={() => void openEditModal(secret)}
+                              data-tooltip="Edit"
+                              aria-label="Edit secret"
+                              disabled={isBusy}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                          {canManageSecrets && (
+                            <button
+                              className="btn btn-ghost btn-icon btn-sm btn-danger-subtle"
+                              onClick={() => setSecretPendingDelete(secret)}
+                              data-tooltip="Delete"
+                              aria-label="Delete secret"
+                              disabled={isBusy}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1329,7 +1230,7 @@ export default function SecretsPage() {
       )}
 
       {/* CLI Hint */}
-      {canUseSecrets && (
+      {canManageSecrets && (
         <div className="secrets-cli-hint">
           <CodeBlock
             commands={[

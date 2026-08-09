@@ -7,7 +7,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import ProjectAccess, get_current_user, get_project_access, require_secret_access
+from app.api.deps import (
+    ProjectAccess,
+    get_current_user,
+    get_project_access,
+    require_secret_management,
+)
 from app.db.session import get_db
 from app.models.environment import Environment
 from app.models.secret import Secret
@@ -159,7 +164,7 @@ def push_secrets(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     payload: SecretPushRequest,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(require_secret_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretPushResponse:
@@ -240,7 +245,7 @@ def push_secrets(
     response_model=ProjectSecretStatsResponse,
 )
 def get_secret_stats(
-    project_access: ProjectAccess = Depends(get_project_access),
+    project_access: ProjectAccess = Depends(get_project_access),  # any member can see stats
     db: Session = Depends(get_db),
 ) -> ProjectSecretStatsResponse:
     environment_stats = get_project_secret_stats(db, project_id=project_access.project.id)
@@ -282,7 +287,7 @@ def list_project_secrets(
         str | None,
         Query(description="Offset cursor returned by a previous project secrets listing."),
     ] = None,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(get_project_access),  # any member can list keys
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectSecretListResponse:
@@ -363,7 +368,7 @@ def list_secrets(
             description="Filter secrets by key (case-insensitive substring match)",
         ),
     ] = None,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(get_project_access),  # any member can list keys
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretListResponse:
@@ -415,7 +420,7 @@ def reveal_secret(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     secret_key: str,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(get_project_access),  # any member can reveal individual values
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretRevealResponse:
@@ -465,7 +470,7 @@ def reveal_secret(
 def pull_secrets(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(require_secret_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretPullResponse:
@@ -515,7 +520,7 @@ def create_secret(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     payload: SecretCreateRequest,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(require_secret_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretMutationResponse:
@@ -581,7 +586,7 @@ def update_secret(
     environment_id: uuid.UUID,
     secret_key: str,
     payload: SecretUpdateRequest,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(require_secret_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretMutationResponse:
@@ -655,7 +660,7 @@ def delete_secret(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     secret_key: str,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(require_secret_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SecretDeleteResponse:
@@ -714,7 +719,7 @@ def delete_secret(
 def bulk_delete_secrets(
     project_id: uuid.UUID,
     payload: SecretBulkDeleteRequest,
-    project_access: ProjectAccess = Depends(require_secret_access),
+    project_access: ProjectAccess = Depends(require_secret_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:

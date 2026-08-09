@@ -42,13 +42,26 @@ def resolve_project(
     reference: str | None = None,
 ) -> ProjectSummary:
     project_ref = reference or app_context.resolved_project
-    if not project_ref:
-        app_context.output.error(
-            "No project selected. Pass --project or run envbasis project use <project-name-or-id>."
-        )
-        raise typer.Exit(code=1)
-
     projects = fetch_projects(client)
+    if not project_ref:
+        if not projects:
+            app_context.output.error("No projects are available for this account.")
+            raise typer.Exit(code=1)
+        if app_context.options.output_json:
+            app_context.output.error(
+                "No project selected. Pass --project or run envbasis project --select <name>."
+            )
+            raise typer.Exit(code=1)
+        project = _prompt_for_selection(app_context, projects, label="project")
+        persist_local_config(
+            app_context,
+            project_id=project.id,
+            project_name=project.name,
+            environment=None,
+        )
+        app_context.output.success(f"Selected project {project.name}")
+        return project
+
     matches = [project for project in projects if project.id == project_ref or project.name == project_ref]
     if not matches:
         app_context.output.error(f'Project "{project_ref}" not found.')
@@ -61,6 +74,22 @@ def resolve_project(
         raise typer.Exit(code=1)
 
     return matches[0]
+
+
+def _prompt_for_selection(app_context: AppContext, items: list[Any], *, label: str):
+    if len(items) == 1:
+        return items[0]
+
+    app_context.output.table(
+        f"Select a {label}",
+        ["Number", "Name"],
+        [[str(index), item.name] for index, item in enumerate(items, start=1)],
+    )
+    choice = typer.prompt(f"{label.title()} number", type=int)
+    if choice < 1 or choice > len(items):
+        app_context.output.error(f"Choose a number between 1 and {len(items)}.")
+        raise typer.Exit(code=1)
+    return items[choice - 1]
 
 
 def persist_local_config(app_context: AppContext, **updates: Any) -> None:
@@ -114,9 +143,17 @@ def resolve_environment(
         raise typer.Exit(code=1)
 
     if len(environments) == 1:
-        return environments[0]
+        environment = environments[0]
+        persist_local_config(app_context, environment=environment.name)
+        return environment
 
-    app_context.output.error(
-        f'Multiple environments exist for project {project.name}. Pass --env or run envbasis env use <name>.'
-    )
-    raise typer.Exit(code=1)
+    if app_context.options.output_json:
+        app_context.output.error(
+            f'Multiple environments exist for project {project.name}. Pass --env or run envbasis environment <name>.'
+        )
+        raise typer.Exit(code=1)
+
+    environment = _prompt_for_selection(app_context, environments, label="environment")
+    persist_local_config(app_context, environment=environment.name)
+    app_context.output.success(f"Selected environment {environment.name}")
+    return environment

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Shield, UserPlus, UserX } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Minus, Pencil, Plus, Shield, UserPlus, UserX, X } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -7,13 +7,14 @@ import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
 import {
+  bulkUpdateMemberPermissions,
   bulkRevokeMembers,
   inviteMember,
   listMembers,
   listProjectInvitations,
   revokeMember,
   revokeProjectInvitation,
-  updateMemberSecretAccess,
+  updateMemberPermissions,
 } from '../lib/api';
 import { formatDate, formatRelativeTime } from '../lib/format';
 import type { ProjectPageCacheApi } from '../lib/projectPageCache';
@@ -23,7 +24,6 @@ import { ApiError } from '../lib/api';
 
 interface OutletContextType {
   currentProject: Project;
-  canManageProject: boolean;
   onMemberCountChanged: (delta: number) => void;
   pageCache: ProjectPageCacheApi;
 }
@@ -48,15 +48,31 @@ interface RevokeConflict {
   };
 }
 
+type PermissionKey = 'can_push_pull_secrets' | 'can_manage_runtime_tokens' | 'can_manage_team' | 'can_view_audit_logs';
+
+type TriState = 'on' | 'off' | 'mixed';
+
+const PERMISSIONS: { key: PermissionKey; label: string }[] = [
+  { key: 'can_push_pull_secrets', label: 'Push/pull secrets' },
+  { key: 'can_manage_runtime_tokens', label: 'Manage runtime tokens' },
+  { key: 'can_manage_team', label: 'Manage team' },
+  { key: 'can_view_audit_logs', label: 'View audit logs' },
+];
+
+function getTriState(members: Member[], key: PermissionKey): TriState {
+  if (members.length === 0) return 'off';
+  const count = members.filter((m) => m[key]).length;
+  if (count === 0) return 'off';
+  if (count === members.length) return 'on';
+  return 'mixed';
+}
+
 function formatRole(role: string | null | undefined): string {
   return role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Member';
 }
 
 function formatInviteError(error: ApiError | Error | null): string {
-  if (!error) {
-    return 'Failed to invite member.';
-  }
-
+  if (!error) return 'Failed to invite member.';
   if (error instanceof ApiError) {
     if (error.status === 429) {
       const d = (error.details as ApiErrorDetails)?.detail;
@@ -65,91 +81,257 @@ function formatInviteError(error: ApiError | Error | null): string {
       }
       return error.message || 'Too many invite emails sent. Please wait for the cooldown.';
     }
-
     if (error.status === 409) {
       return error.message || 'This user already has access to the project.';
     }
   }
-
   return error.message || 'Failed to invite member.';
 }
 
 function getInviteCooldownMs(cooldownUntil: string | null, nowMs: number): number {
-  if (!cooldownUntil) {
-    return 0;
-  }
-
+  if (!cooldownUntil) return 0;
   return Math.max(0, new Date(cooldownUntil).getTime() - nowMs);
 }
 
 function formatDuration(ms: number): string {
   const totalMinutes = Math.ceil(ms / 60000);
-  if (totalMinutes <= 1) {
-    return 'under 1 minute';
-  }
-
+  if (totalMinutes <= 1) return 'under 1 minute';
   const days = Math.floor(totalMinutes / (24 * 60));
   const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
   const minutes = totalMinutes % 60;
-
-  if (days > 0) {
-    if (hours > 0) {
-      return `${days}d ${hours}h`;
-    }
-    return `${days}d`;
-  }
-
-  if (hours > 0) {
-    if (minutes > 0) {
-      return `${hours}h ${minutes}m`;
-    }
-    return `${hours}h`;
-  }
-
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
   return `${minutes}m`;
 }
 
 function formatInviteLastSent(lastSentAt: string | null): string {
-  if (!lastSentAt) {
-    return 'Not sent yet';
-  }
-
+  if (!lastSentAt) return 'Not sent yet';
   return formatRelativeTime(lastSentAt);
 }
 
+// ─── Permission popover (per-member edit) ────────────────────────────────────
+
+interface PermissionPopoverProps {
+  member: Member;
+  disabled: boolean;
+  onToggle: (member: Member, key: PermissionKey) => void;
+}
+
+function PermissionPopover({ member, disabled, onToggle }: PermissionPopoverProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  return (
+    <div className="perm-popover-root" ref={ref}>
+      <button
+        className="btn btn-ghost btn-icon btn-sm"
+        aria-label="Edit permissions"
+        data-tooltip="Edit permissions"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Pencil size={13} />
+      </button>
+      {open && (
+        <div className="perm-popover">
+          <div className="perm-popover-title">Permissions</div>
+          {PERMISSIONS.map(({ key, label }) => {
+            const isOn = member[key];
+            return (
+              <label key={key} className={`perm-popover-row ${isOn ? 'perm-row-will-remove' : 'perm-row-will-add'}`}>
+                <input
+                  type="checkbox"
+                  className="cb-input"
+                  checked={isOn}
+                  onChange={() => {
+                    onToggle(member, key);
+                    setOpen(false);
+                  }}
+                  disabled={disabled}
+                />
+                <span className="perm-popover-label">{label}</span>
+                <span className={`perm-action-hint ${isOn ? 'perm-action-hint-remove' : 'perm-action-hint-add'}`}>
+                  {isOn ? '− Remove' : '+ Grant'}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Bulk permission bar ──────────────────────────────────────────────────────
+
+interface BulkPermBarProps {
+  selectedMembers: Member[];
+  isBusy: boolean;
+  onBulkPermission: (key: PermissionKey, value: boolean) => void;
+  onRevoke: () => void;
+  onClear: () => void;
+}
+
+function BulkPermBar({ selectedMembers, isBusy, onBulkPermission, onRevoke, onClear }: BulkPermBarProps) {
+  const [grantOpen, setGrantOpen] = useState(false);
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const grantRef = useRef<HTMLDivElement>(null);
+  const revokeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!grantOpen && !revokeOpen) return undefined;
+    function handleClick(e: MouseEvent) {
+      if (grantRef.current && !grantRef.current.contains(e.target as Node)) setGrantOpen(false);
+      if (revokeRef.current && !revokeRef.current.contains(e.target as Node)) setRevokeOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [grantOpen, revokeOpen]);
+
+  return (
+    <div className="bulk-bar">
+      <span className="bulk-bar-count">{selectedMembers.length} selected</span>
+      <div className="bulk-bar-divider" />
+
+      {/* Grant */}
+      <div className="perm-popover-root" ref={grantRef}>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => { setGrantOpen((v) => !v); setRevokeOpen(false); }}
+          disabled={isBusy}
+        >
+          <Plus size={12} />
+          Grant ▾
+        </button>
+        {grantOpen && (
+          <div className="perm-popover perm-popover-bulk">
+            <div className="perm-popover-title">Grant to selected</div>
+            {PERMISSIONS.map(({ key, label }) => {
+              const allHave = getTriState(selectedMembers, key) === 'on';
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`perm-action-row perm-action-grant${allHave ? ' perm-action-noop' : ''}`}
+                  onClick={() => { onBulkPermission(key, true); setGrantOpen(false); }}
+                  disabled={isBusy || allHave}
+                >
+                  <span className="perm-popover-label">{label}</span>
+                  {allHave && <span className="perm-mixed-hint">all have it</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Revoke permission (not member) */}
+      <div className="perm-popover-root" ref={revokeRef}>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => { setRevokeOpen((v) => !v); setGrantOpen(false); }}
+          disabled={isBusy}
+        >
+          <Minus size={12} />
+          Revoke ▾
+        </button>
+        {revokeOpen && (
+          <div className="perm-popover perm-popover-bulk">
+            <div className="perm-popover-title">Revoke from selected</div>
+            {PERMISSIONS.map(({ key, label }) => {
+              const noneHave = getTriState(selectedMembers, key) === 'off';
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`perm-action-row perm-action-revoke${noneHave ? ' perm-action-noop' : ''}`}
+                  onClick={() => { onBulkPermission(key, false); setRevokeOpen(false); }}
+                  disabled={isBusy || noneHave}
+                >
+                  <span className="perm-popover-label">{label}</span>
+                  {noneHave && <span className="perm-mixed-hint">none have it</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <button className="btn btn-danger btn-sm" onClick={onRevoke} disabled={isBusy}>
+        <UserX size={13} />
+        Revoke Access
+      </button>
+      <button className="btn btn-ghost btn-icon btn-sm" aria-label="Clear selection" onClick={onClear} disabled={isBusy}>
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function TeamPage() {
-  const { currentProject, canManageProject, onMemberCountChanged, pageCache } =
+  const { currentProject, onMemberCountChanged, pageCache } =
     useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
+  const canManageTeam = currentProject.can_manage_team;
   const teamCacheKey = `team:${currentProject.id}`;
   const cachedTeam = pageCache.get<TeamCacheEntry>(teamCacheKey);
+
   const [members, setMembers] = useState<Member[]>(() => cachedTeam?.members ?? []);
   const [isLoading, setIsLoading] = useState(() => !cachedTeam);
   const [error, setError] = useState<string | null>(null);
+
+  // invite
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteCanPushPullSecrets, setInviteCanPushPullSecrets] = useState(true);
+  const [invitePerms, setInvitePerms] = useState<Record<PermissionKey, boolean>>({
+    can_push_pull_secrets: false,
+    can_manage_runtime_tokens: false,
+    can_manage_team: false,
+    can_view_audit_logs: false,
+  });
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [isInviting, setIsInviting] = useState(false);
+
+  // per-member edit
   const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
+
+  // revoke conflict modal
   const [revokeConflict, setRevokeConflict] = useState<RevokeConflict | null>(null);
   const [keepActiveConfirm, setKeepActiveConfirm] = useState(false);
+
+  // pending invites
   const [pendingInvites, setPendingInvites] = useState<ProjectInvitation[]>(() => cachedTeam?.pendingInvites ?? []);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
   const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
   const [selectedInviteIds, setSelectedInviteIds] = useState<string[]>([]);
   const [isBulkRevokingInvites, setIsBulkRevokingInvites] = useState(false);
   const [showBulkRevokeInvitesConfirm, setShowBulkRevokeInvitesConfirm] = useState(false);
+
+  // bulk member selection
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [bulkMembersPendingRevoke, setBulkMembersPendingRevoke] = useState<Member[]>([]);
   const [isBulkRevoking, setIsBulkRevoking] = useState(false);
+  const [isBulkUpdatingPermissions, setIsBulkUpdatingPermissions] = useState(false);
+
   const [nowMs, setNowMs] = useState(() => Date.now());
 
-  useEffect(() => {
-    if (!accessToken) {
-      return undefined;
-    }
+  // ── load ──────────────────────────────────────────────────────────────────
 
+  useEffect(() => {
+    if (!accessToken) return undefined;
     if (apiConfigError) {
       setError(apiConfigError);
       setIsLoading(false);
@@ -164,142 +346,109 @@ export default function TeamPage() {
         setIsLoading(false);
         return;
       }
-
       setIsLoading(true);
       setError(null);
-
       try {
         const [response, invites] = await Promise.all([
-          listMembers(currentProject.id, accessToken!, {
-            signal: controller.signal,
-          }),
-          canManageProject
-            ? listProjectInvitations(currentProject.id, accessToken!, {
-                signal: controller.signal,
-              })
+          listMembers(currentProject.id, accessToken!, { signal: controller.signal }),
+          canManageTeam
+            ? listProjectInvitations(currentProject.id, accessToken!, { signal: controller.signal })
             : Promise.resolve([] as ProjectInvitation[]),
         ]);
-
-        if (!isActive) {
-          return;
-        }
-
+        if (!isActive) return;
         setMembers(response);
         setPendingInvites(invites);
-        pageCache.set<TeamCacheEntry>(teamCacheKey, {
-          members: response,
-          pendingInvites: invites,
-        });
+        pageCache.set<TeamCacheEntry>(teamCacheKey, { members: response, pendingInvites: invites });
       } catch (loadError) {
-        if (!isActive || controller.signal.aborted) {
-          return;
-        }
-
+        if (!isActive || controller.signal.aborted) return;
         setError((loadError as Error).message || 'Failed to load team members.');
         setMembers([]);
         setPendingInvites([]);
       } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
+        if (isActive) setIsLoading(false);
       }
     }
 
     void loadMembers();
-
     return () => {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, cachedTeam, canManageProject, currentProject.id, pageCache, teamCacheKey]);
+  }, [accessToken, apiConfigError, cachedTeam, canManageTeam, currentProject.id, pageCache, teamCacheKey]);
 
   useEffect(() => {
     if (!isLoading && !error) {
-      pageCache.set<TeamCacheEntry>(teamCacheKey, {
-        members,
-        pendingInvites,
-      });
+      pageCache.set<TeamCacheEntry>(teamCacheKey, { members, pendingInvites });
     }
   }, [error, isLoading, members, pageCache, pendingInvites, teamCacheKey]);
 
   useEffect(() => {
-    setSelectedMemberIds((current) =>
-      current.filter((memberId) => members.some((member) => member.user_id === memberId && member.role !== 'owner'))
+    setSelectedMemberIds((cur) =>
+      cur.filter((id) => members.some((m) => m.user_id === id && m.role !== 'owner'))
     );
   }, [members]);
 
   useEffect(() => {
-    setSelectedInviteIds((current) =>
-      current.filter((id) => pendingInvites.some((inv) => inv.id === id))
-    );
+    setSelectedInviteIds((cur) => cur.filter((id) => pendingInvites.some((inv) => inv.id === id)));
   }, [pendingInvites]);
 
   useEffect(() => {
     setNowMs(Date.now());
     const hasActiveCooldown = pendingInvites.some((inv) => getInviteCooldownMs(inv.cooldown_until, Date.now()) > 0);
-    if (!hasActiveCooldown) {
-      return undefined;
-    }
-
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 60000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
+    if (!hasActiveCooldown) return undefined;
+    const interval = window.setInterval(() => setNowMs(Date.now()), 60000);
+    return () => window.clearInterval(interval);
   }, [pendingInvites]);
 
-  const selectedMembers = members.filter((member) => selectedMemberIds.includes(member.user_id));
-  const revocableMembers = members.filter((member) => member.role !== 'owner');
-  const allRevocableSelected =
-    revocableMembers.length > 0 &&
-    revocableMembers.every((member) => selectedMemberIds.includes(member.user_id));
+  // ── derived ───────────────────────────────────────────────────────────────
 
+  const selectedMembers = members.filter((m) => selectedMemberIds.includes(m.user_id));
+  const revocableMembers = members.filter((m) => m.role !== 'owner');
+  const allRevocableSelected =
+    revocableMembers.length > 0 && revocableMembers.every((m) => selectedMemberIds.includes(m.user_id));
   const selectedInvites = pendingInvites.filter((inv) => selectedInviteIds.includes(inv.id));
   const allInvitesSelected =
-    pendingInvites.length > 0 &&
-    pendingInvites.every((inv) => selectedInviteIds.includes(inv.id));
+    pendingInvites.length > 0 && pendingInvites.every((inv) => selectedInviteIds.includes(inv.id));
 
-  const closeInviteModal = () => {
-    if (isInviting) {
-      return;
-    }
+  // ── helpers ───────────────────────────────────────────────────────────────
 
+  const applyUpdatedMembers = (updatedMembers: Member[]) => {
+    const byId = new Map(updatedMembers.map((m) => [m.user_id, m]));
+    setMembers((cur) => cur.map((m) => byId.get(m.user_id) ?? m));
+  };
+
+  // ── invite ────────────────────────────────────────────────────────────────
+
+  const resetInviteForm = () => {
     setShowInvite(false);
     setInviteEmail('');
-    setInviteCanPushPullSecrets(true);
+    setInvitePerms({
+      can_push_pull_secrets: false,
+      can_manage_runtime_tokens: false,
+      can_manage_team: false,
+      can_view_audit_logs: false,
+    });
     setInviteError(null);
+  };
+
+  const closeInviteModal = () => {
+    if (isInviting) return;
+    resetInviteForm();
   };
 
   const handleInviteMember = async () => {
     const email = inviteEmail.trim().toLowerCase();
-    if (!email) {
-      setInviteError('Member email is required.');
-      return;
-    }
-
+    if (!email) { setInviteError('Member email is required.'); return; }
     setIsInviting(true);
     setInviteError(null);
-
     try {
-      const result = await inviteMember(currentProject.id, accessToken!, {
-        email,
-        role: 'member',
-        can_push_pull_secrets: inviteCanPushPullSecrets,
-      });
-
+      const result = await inviteMember(currentProject.id, accessToken!, { email, role: 'member', ...invitePerms });
       setPendingInvites((cur) => {
         const others = cur.filter((p) => p.id !== result.invitation.id);
         return [result.invitation, ...others];
       });
-      if (!result.email_sent && result.message) {
-        setError(result.message);
-      }
-      setInviteError(null);
-      setShowInvite(false);
-      setInviteEmail('');
-      setInviteCanPushPullSecrets(true);
+      if (!result.email_sent && result.message) setError(result.message);
+      resetInviteForm();
     } catch (inviteErrorValue) {
       setInviteError(formatInviteError(inviteErrorValue as ApiError));
     } finally {
@@ -307,32 +456,47 @@ export default function TeamPage() {
     }
   };
 
-  const handleToggleSecretAccess = async (member: Member) => {
+  // ── per-member permission toggle ──────────────────────────────────────────
+
+  const handleTogglePermission = async (member: Member, key: PermissionKey) => {
     setActiveMemberEmail(member.email);
     setError(null);
-
     try {
-      const updatedMember = await updateMemberSecretAccess(currentProject.id, accessToken!, {
+      const updated = await updateMemberPermissions(currentProject.id, accessToken!, {
         email: member.email,
-        can_push_pull_secrets: !member.can_push_pull_secrets,
+        [key]: !member[key],
       });
-
-      setMembers((currentMembers) =>
-        currentMembers.map((currentMember) =>
-          currentMember.user_id === updatedMember.user_id ? updatedMember : currentMember
-        )
-      );
+      applyUpdatedMembers([updated]);
     } catch (toggleError) {
-      setError((toggleError as Error).message || 'Failed to update secret access.');
+      setError((toggleError as Error).message || 'Failed to update member permissions.');
     } finally {
       setActiveMemberEmail(null);
     }
   };
 
-  const handleRevokePendingInvite = async (invitation: ProjectInvitation) => {
-    if (!accessToken) {
-      return;
+  // ── bulk permission update ────────────────────────────────────────────────
+
+  const handleBulkPermission = async (key: PermissionKey, value: boolean) => {
+    if (selectedMembers.length === 0) return;
+    setIsBulkUpdatingPermissions(true);
+    setError(null);
+    try {
+      const updated = await bulkUpdateMemberPermissions(currentProject.id, accessToken!, {
+        emails: selectedMembers.map((m) => m.email),
+        [key]: value,
+      });
+      applyUpdatedMembers(updated);
+    } catch (permError) {
+      setError((permError as Error).message || 'Failed to update permissions.');
+    } finally {
+      setIsBulkUpdatingPermissions(false);
     }
+  };
+
+  // ── pending invite actions ────────────────────────────────────────────────
+
+  const handleRevokePendingInvite = async (invitation: ProjectInvitation) => {
+    if (!accessToken) return;
     setRevokingInviteId(invitation.id);
     setError(null);
     try {
@@ -346,67 +510,47 @@ export default function TeamPage() {
   };
 
   const handleResendPendingInvite = async (invitation: ProjectInvitation) => {
-    if (!accessToken) {
-      return;
-    }
-
+    if (!accessToken) return;
     setResendingInviteId(invitation.id);
     setError(null);
-
     try {
       const result = await inviteMember(currentProject.id, accessToken, {
         email: invitation.email,
         role: 'member',
         can_push_pull_secrets: invitation.can_push_pull_secrets,
+        can_manage_runtime_tokens: invitation.can_manage_runtime_tokens,
+        can_manage_team: invitation.can_manage_team,
+        can_view_audit_logs: invitation.can_view_audit_logs,
       });
-
-      setPendingInvites((current) => {
-        const others = current.filter((pendingInvite) => pendingInvite.id !== result.invitation.id);
+      setPendingInvites((cur) => {
+        const others = cur.filter((p) => p.id !== result.invitation.id);
         return [result.invitation, ...others];
       });
-
-      if (!result.email_sent && result.message) {
-        setError(result.message);
-      }
-    } catch (resendErrorValue) {
-      setError(formatInviteError(resendErrorValue as ApiError));
+      if (!result.email_sent && result.message) setError(result.message);
+    } catch (resendErr) {
+      setError(formatInviteError(resendErr as ApiError));
     } finally {
       setResendingInviteId(null);
     }
   };
 
   const toggleInviteSelection = (inviteId: string) => {
-    setSelectedInviteIds((current) =>
-      current.includes(inviteId)
-        ? current.filter((id) => id !== inviteId)
-        : [...current, inviteId]
+    setSelectedInviteIds((cur) =>
+      cur.includes(inviteId) ? cur.filter((id) => id !== inviteId) : [...cur, inviteId]
     );
   };
 
   const toggleSelectAllInvites = () => {
-    if (allInvitesSelected) {
-      setSelectedInviteIds([]);
-    } else {
-      setSelectedInviteIds(pendingInvites.map((inv) => inv.id));
-    }
+    setSelectedInviteIds(allInvitesSelected ? [] : pendingInvites.map((inv) => inv.id));
   };
 
   const handleBulkRevokeInvites = async () => {
-    if (selectedInvites.length === 0) {
-      setShowBulkRevokeInvitesConfirm(false);
-      return;
-    }
+    if (selectedInvites.length === 0) { setShowBulkRevokeInvitesConfirm(false); return; }
     setIsBulkRevokingInvites(true);
     setError(null);
     try {
-      await Promise.all(
-        selectedInvites.map((inv) =>
-          revokeProjectInvitation(currentProject.id, inv.id, accessToken!)
-        )
-      );
-      setPendingInvites((current) =>
-        current.filter((inv) => !selectedInvites.some((s) => s.id === inv.id))
-      );
+      await Promise.all(selectedInvites.map((inv) => revokeProjectInvitation(currentProject.id, inv.id, accessToken!)));
+      setPendingInvites((cur) => cur.filter((inv) => !selectedInvites.some((s) => s.id === inv.id)));
       setSelectedInviteIds([]);
       setShowBulkRevokeInvitesConfirm(false);
     } catch (err) {
@@ -416,31 +560,22 @@ export default function TeamPage() {
     }
   };
 
+  // ── member selection ──────────────────────────────────────────────────────
+
   const toggleMemberSelection = (memberId: string) => {
-    setSelectedMemberIds((current) =>
-      current.includes(memberId)
-        ? current.filter((id) => id !== memberId)
-        : [...current, memberId]
+    setSelectedMemberIds((cur) =>
+      cur.includes(memberId) ? cur.filter((id) => id !== memberId) : [...cur, memberId]
     );
   };
 
   const toggleSelectAllMembers = () => {
-    if (allRevocableSelected) {
-      setSelectedMemberIds([]);
-      return;
-    }
-
-    setSelectedMemberIds(revocableMembers.map((member) => member.user_id));
+    setSelectedMemberIds(allRevocableSelected ? [] : revocableMembers.map((m) => m.user_id));
   };
 
-  const attemptRevokeMembers = async (
-    revokeMembers: Member[],
-    sharedTokenAction: string | null = null
-  ) => {
-    if (revokeMembers.length === 0) {
-      return;
-    }
+  // ── member revoke ─────────────────────────────────────────────────────────
 
+  const attemptRevokeMembers = async (revokeMembers: Member[], sharedTokenAction: string | null = null) => {
+    if (revokeMembers.length === 0) return;
     const isBulk = revokeMembers.length > 1;
     if (isBulk) {
       setIsBulkRevoking(true);
@@ -449,11 +584,10 @@ export default function TeamPage() {
       setActiveMemberEmail(revokeMembers[0].email);
     }
     setError(null);
-
     try {
       if (isBulk) {
         await bulkRevokeMembers(currentProject.id, accessToken!, {
-          emails: revokeMembers.map((member) => member.email),
+          emails: revokeMembers.map((m) => m.email),
           ...(sharedTokenAction ? { shared_token_action: sharedTokenAction } : {}),
         });
       } else {
@@ -462,18 +596,8 @@ export default function TeamPage() {
           ...(sharedTokenAction ? { shared_token_action: sharedTokenAction } : {}),
         });
       }
-
-      setMembers((currentMembers) =>
-        currentMembers.filter(
-          (currentMember) =>
-            !revokeMembers.some((revokeMemberItem) => revokeMemberItem.user_id === currentMember.user_id)
-        )
-      );
-      setSelectedMemberIds((current) =>
-        current.filter(
-          (memberId) => !revokeMembers.some((revokeMemberItem) => revokeMemberItem.user_id === memberId)
-        )
-      );
+      setMembers((cur) => cur.filter((m) => !revokeMembers.some((r) => r.user_id === m.user_id)));
+      setSelectedMemberIds((cur) => cur.filter((id) => !revokeMembers.some((r) => r.user_id === id)));
       onMemberCountChanged(-revokeMembers.length);
       setRevokeConflict(null);
       setKeepActiveConfirm(false);
@@ -481,10 +605,7 @@ export default function TeamPage() {
       const apiError = revokeErrorValue as ApiError;
       const detail = (apiError.details as ApiErrorDetails)?.detail;
       if (detail?.code === 'shared_runtime_token_confirmation_required') {
-        setRevokeConflict({
-          members: revokeMembers,
-          detail,
-        });
+        setRevokeConflict({ members: revokeMembers, detail });
       } else {
         setError(apiError.message || 'Failed to revoke member.');
       }
@@ -493,6 +614,10 @@ export default function TeamPage() {
       setActiveMemberEmail(null);
     }
   };
+
+  // ── render ────────────────────────────────────────────────────────────────
+
+  const isBulkBusy = isBulkRevoking || isBulkUpdatingPermissions;
 
   return (
     <div className="team-page animate-in">
@@ -504,29 +629,33 @@ export default function TeamPage() {
           </p>
         </div>
         <div className="page-header-actions">
-          <button
-            className="btn btn-danger"
-            onClick={() => setBulkMembersPendingRevoke(selectedMembers)}
-            disabled={!canManageProject || selectedMembers.length === 0 || isBulkRevoking}
-          >
-            <UserX size={14} />
-            Revoke Selected
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => setShowInvite(true)}
-            id="invite-member-btn"
-            disabled={!canManageProject}
-          >
-            <UserPlus size={14} />
-            Invite Member
-          </button>
+          {canManageTeam && (
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowInvite(true)}
+              id="invite-member-btn"
+            >
+              <UserPlus size={14} />
+              Invite Member
+            </button>
+          )}
         </div>
       </div>
 
-      {!canManageProject && (
+      {/* Bulk action bar — shown only when members are selected */}
+      {canManageTeam && selectedMembers.length > 0 && (
+        <BulkPermBar
+          selectedMembers={selectedMembers}
+          isBusy={isBulkBusy}
+          onBulkPermission={handleBulkPermission}
+          onRevoke={() => setBulkMembersPendingRevoke(selectedMembers)}
+          onClear={() => setSelectedMemberIds([])}
+        />
+      )}
+
+      {!canManageTeam && (
         <p className="team-note">
-          Only project owners can invite members, change secret access, or revoke access.
+          You can view project members, but only permitted managers can invite members, update permissions, or revoke access.
         </p>
       )}
 
@@ -536,7 +665,8 @@ export default function TeamPage() {
         </div>
       )}
 
-      {canManageProject && pendingInvites.length > 0 && (
+      {/* Pending invitations */}
+      {canManageTeam && pendingInvites.length > 0 && (
         <div className="card pending-invites-card">
           <div className="pending-invites-header">
             <span className="pending-invites-title">Pending Invitations</span>
@@ -567,7 +697,7 @@ export default function TeamPage() {
                     />
                   </th>
                   <th>Recipient</th>
-                  <th>Secrets access</th>
+                  <th>Permissions</th>
                   <th>Delivery</th>
                   <th>Expires</th>
                   <th style={{ width: 180 }}>Actions</th>
@@ -577,9 +707,7 @@ export default function TeamPage() {
                 {pendingInvites.map((inv) => {
                   const cooldownMs = getInviteCooldownMs(inv.cooldown_until, nowMs);
                   const cooldownActive = cooldownMs > 0;
-                  const isBusy =
-                    revokingInviteId === inv.id || resendingInviteId === inv.id || isBulkRevokingInvites;
-
+                  const isBusy = revokingInviteId === inv.id || resendingInviteId === inv.id || isBulkRevokingInvites;
                   return (
                     <tr key={inv.id}>
                       <td className="table-checkbox-cell">
@@ -592,18 +720,19 @@ export default function TeamPage() {
                       </td>
                       <td className="mono">{inv.email}</td>
                       <td>
-                        <span className={`badge ${inv.can_push_pull_secrets ? 'badge-success' : 'badge-neutral'}`}>
-                          {inv.can_push_pull_secrets ? 'Yes' : 'No'}
-                        </span>
+                        <div className="perm-badge-list">
+                          {PERMISSIONS.filter(({ key }) => inv[key]).map(({ key, label }) => (
+                            <span key={key} className="badge badge-neutral">{label}</span>
+                          ))}
+                          {PERMISSIONS.every(({ key }) => !inv[key]) && (
+                            <span className="badge badge-neutral">View only</span>
+                          )}
+                        </div>
                       </td>
                       <td>
                         <div className="team-invite-delivery">
-                          <span className="team-invite-meta">
-                            Sent {inv.send_count} email{inv.send_count === 1 ? '' : 's'}
-                          </span>
-                          <span className="team-invite-meta">
-                            Last sent {formatInviteLastSent(inv.last_sent_at)}
-                          </span>
+                          <span className="team-invite-meta">Sent {inv.send_count} email{inv.send_count === 1 ? '' : 's'}</span>
+                          <span className="team-invite-meta">Last sent {formatInviteLastSent(inv.last_sent_at)}</span>
                           <span className={cooldownActive ? 'team-invite-cooldown' : 'team-invite-meta'}>
                             {cooldownActive ? `Resend in ${formatDuration(cooldownMs)}` : 'Ready to resend'}
                           </span>
@@ -638,20 +767,20 @@ export default function TeamPage() {
           </div>
           {pendingInvites.some((p) => getInviteCooldownMs(p.cooldown_until, nowMs) > 0) && (
             <p className="pending-invites-note">
-              After two invite emails to the same address, resend pauses for 5 days. The delivery
-              column shows the remaining cooldown and the last time an invite email was sent.
+              After two invite emails to the same address, resend pauses for 5 days.
             </p>
           )}
         </div>
       )}
 
+      {/* Members table */}
       {isLoading ? (
         <SectionLoader label="Loading team" />
       ) : members.length === 0 ? (
         <div className="empty-state">
           <h3>No members yet</h3>
           <p>Invite teammates by email. They will accept from the email link or their notifications.</p>
-          {canManageProject && (
+          {canManageTeam && (
             <button className="btn btn-primary" onClick={() => setShowInvite(true)}>
               <UserPlus size={14} />
               Invite Member
@@ -670,20 +799,21 @@ export default function TeamPage() {
                       indeterminate={selectedMemberIds.length > 0 && !allRevocableSelected}
                       onChange={toggleSelectAllMembers}
                       aria-label="Select all members"
-                      disabled={!canManageProject || isBulkRevoking}
+                      disabled={!canManageTeam || isBulkBusy}
                     />
                   </th>
                   <th>Member</th>
                   <th>Role</th>
-                  <th>Secrets Access</th>
+                  <th>Permissions</th>
                   <th>Joined</th>
-                  <th style={{ width: 120 }}>Actions</th>
+                  <th style={{ width: 80 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {members.map((member) => {
                   const isOwner = member.role === 'owner';
-                  const isBusy = isBulkRevoking || activeMemberEmail === member.email;
+                  const isBusy = isBulkBusy || activeMemberEmail === member.email;
+                  const activePerms = PERMISSIONS.filter(({ key }) => member[key]);
 
                   return (
                     <tr key={member.user_id}>
@@ -693,7 +823,7 @@ export default function TeamPage() {
                             checked={selectedMemberIds.includes(member.user_id)}
                             onChange={() => toggleMemberSelection(member.user_id)}
                             aria-label={`Select member ${member.email}`}
-                            disabled={!canManageProject || isBusy}
+                            disabled={!canManageTeam || isBusy}
                           />
                         )}
                       </td>
@@ -713,29 +843,40 @@ export default function TeamPage() {
                         </span>
                       </td>
                       <td>
-                        <button
-                          className={`btn btn-sm ${member.can_push_pull_secrets ? 'btn-secondary' : 'btn-ghost'}`}
-                          onClick={() => handleToggleSecretAccess(member)}
-                          disabled={!canManageProject || isOwner || isBusy}
-                        >
-                          {member.can_push_pull_secrets ? 'Enabled' : 'Disabled'}
-                        </button>
+                        <div className="perm-badge-list">
+                          {isOwner ? (
+                            <span className="badge badge-accent">All permissions</span>
+                          ) : activePerms.length > 0 ? (
+                            activePerms.map(({ key, label }) => (
+                              <span key={key} className="badge badge-neutral">{label}</span>
+                            ))
+                          ) : (
+                            <span className="badge badge-neutral">View only</span>
+                          )}
+                        </div>
                       </td>
                       <td className="text-secondary">{formatDate(member.joined_at)}</td>
                       <td>
-                        {!isOwner && (
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm btn-danger-subtle"
-                            data-tooltip="Revoke Access"
-                            aria-label="Revoke access"
-                            onClick={() => {
-                              void attemptRevokeMembers([member]);
-                            }}
-                            disabled={!canManageProject || isBusy}
-                          >
-                            <UserX size={14} />
-                          </button>
-                        )}
+                        <div className="team-row-actions">
+                          {!isOwner && canManageTeam && (
+                            <PermissionPopover
+                              member={member}
+                              disabled={isBusy}
+                              onToggle={handleTogglePermission}
+                            />
+                          )}
+                          {!isOwner && canManageTeam && (
+                            <button
+                              className="btn btn-ghost btn-icon btn-sm btn-danger-subtle"
+                              data-tooltip="Revoke Access"
+                              aria-label="Revoke access"
+                              onClick={() => void attemptRevokeMembers([member])}
+                              disabled={isBusy}
+                            >
+                              <UserX size={14} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -746,25 +887,17 @@ export default function TeamPage() {
         </div>
       )}
 
+      {/* Invite modal */}
       <Modal
         isOpen={showInvite}
         onClose={closeInviteModal}
         title="Invite Team Member"
         footer={
           <>
-            <button
-              className="btn btn-secondary"
-              onClick={closeInviteModal}
-              disabled={isInviting}
-            >
+            <button className="btn btn-secondary" onClick={closeInviteModal} disabled={isInviting}>
               Cancel
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={handleInviteMember}
-              id="send-invite-btn"
-              disabled={isInviting}
-            >
+            <button className="btn btn-primary" onClick={handleInviteMember} id="send-invite-btn" disabled={isInviting}>
               <UserPlus size={14} />
               {isInviting ? 'Inviting...' : 'Invite Member'}
             </button>
@@ -783,22 +916,25 @@ export default function TeamPage() {
             disabled={isInviting}
           />
         </div>
-        <div className="team-checkbox-row">
-          <input
-            id="invite-secret-access"
-            type="checkbox"
-            checked={inviteCanPushPullSecrets}
-            onChange={(event) => setInviteCanPushPullSecrets(event.target.checked)}
-            disabled={isInviting}
-          />
-          <label htmlFor="invite-secret-access">
-            Allow this member to push and pull secrets.
-          </label>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label>Permissions</label>
+          <div className="invite-perms-grid">
+            {PERMISSIONS.map(({ key, label }) => (
+              <label key={key} className="team-checkbox-row" style={{ marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  className="cb-input"
+                  checked={invitePerms[key]}
+                  onChange={(e) => setInvitePerms((cur) => ({ ...cur, [key]: e.target.checked }))}
+                  disabled={isInviting}
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
         </div>
         {inviteError && (
-          <p className="team-error" role="alert">
-            {inviteError}
-          </p>
+          <p className="team-error" role="alert">{inviteError}</p>
         )}
         <p className="invite-hint">
           The recipient gets an email with a link (if SMTP is configured). They can also see pending
@@ -806,50 +942,24 @@ export default function TeamPage() {
         </p>
       </Modal>
 
+      {/* Shared token conflict modal */}
       <Modal
         isOpen={Boolean(revokeConflict)}
-        onClose={() => {
-          setRevokeConflict(null);
-          setKeepActiveConfirm(false);
-        }}
+        onClose={() => { setRevokeConflict(null); setKeepActiveConfirm(false); }}
         title="Revoke Member Access"
         footer={
           keepActiveConfirm ? (
             <>
-              <button
-                className="btn btn-secondary"
-                onClick={() => setKeepActiveConfirm(false)}
-              >
-                Back
-              </button>
-              <button
-                className="btn btn-danger"
-                onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'keep_active')}
-              >
+              <button className="btn btn-secondary" onClick={() => setKeepActiveConfirm(false)}>Back</button>
+              <button className="btn btn-danger" onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'keep_active')}>
                 Yes, Keep Tokens Active
               </button>
             </>
           ) : (
             <>
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  setRevokeConflict(null);
-                  setKeepActiveConfirm(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => setKeepActiveConfirm(true)}
-              >
-                Keep Tokens Active
-              </button>
-              <button
-                className="btn btn-danger"
-                onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'revoke_tokens')}
-              >
+              <button className="btn btn-secondary" onClick={() => { setRevokeConflict(null); setKeepActiveConfirm(false); }}>Cancel</button>
+              <button className="btn btn-secondary" onClick={() => setKeepActiveConfirm(true)}>Keep Tokens Active</button>
+              <button className="btn btn-danger" onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'revoke_tokens')}>
                 Revoke Tokens Too
               </button>
             </>
@@ -870,56 +980,46 @@ export default function TeamPage() {
                     ? 'This member has shared runtime tokens. Choose whether to keep them active or revoke them.'
                     : 'Some selected members have shared runtime tokens. Choose whether to keep them active or revoke them.'}
                 </p>
-                {(revokeConflict.detail.members ??
-                  [
-                    {
-                      email: revokeConflict.members[0]?.email || '',
-                      shared_tokens: revokeConflict.detail.shared_tokens || [],
-                      revealed_shared_tokens: revokeConflict.detail.revealed_shared_tokens || [],
-                    },
-                  ]).map((conflictMember) => (
-                    <div key={conflictMember.email} className="team-bulk-conflict-block">
-                      <p className="team-modal-copy" style={{ marginBottom: 6 }}>
-                        <strong>{conflictMember.email}</strong>
-                      </p>
-                      {conflictMember.shared_tokens.length > 0 && (
-                        <div className="team-token-list">
-                          {conflictMember.shared_tokens.map((token) => (
-                            <span className="badge badge-neutral" key={token.id}>
-                              {token.name}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {conflictMember.revealed_shared_tokens.length > 0 && (
-                        <div className="team-token-list" style={{ marginTop: 12 }}>
-                          {conflictMember.revealed_shared_tokens.map((token) => (
-                            <span className="badge badge-warning" key={token.id}>
-                              {token.name}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                {(revokeConflict.detail.members ?? [
+                  {
+                    email: revokeConflict.members[0]?.email || '',
+                    shared_tokens: revokeConflict.detail.shared_tokens || [],
+                    revealed_shared_tokens: revokeConflict.detail.revealed_shared_tokens || [],
+                  },
+                ]).map((conflictMember) => (
+                  <div key={conflictMember.email} className="team-bulk-conflict-block">
+                    <p className="team-modal-copy" style={{ marginBottom: 6 }}>
+                      <strong>{conflictMember.email}</strong>
+                    </p>
+                    {conflictMember.shared_tokens.length > 0 && (
+                      <div className="team-token-list">
+                        {conflictMember.shared_tokens.map((token) => (
+                          <span className="badge badge-neutral" key={token.id}>{token.name}</span>
+                        ))}
+                      </div>
+                    )}
+                    {conflictMember.revealed_shared_tokens.length > 0 && (
+                      <div className="team-token-list" style={{ marginTop: 12 }}>
+                        {conflictMember.revealed_shared_tokens.map((token) => (
+                          <span className="badge badge-warning" key={token.id}>{token.name}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </>
             )}
           </>
         )}
       </Modal>
+
       <ConfirmDialog
         isOpen={bulkMembersPendingRevoke.length > 0}
         title="Revoke Selected Members"
         description={`Revoke access for ${bulkMembersPendingRevoke.length} selected member${bulkMembersPendingRevoke.length !== 1 ? 's' : ''}?`}
         confirmLabel="Revoke Members"
-        onConfirm={() => {
-          void attemptRevokeMembers(bulkMembersPendingRevoke);
-        }}
-        onClose={() => {
-          if (!isBulkRevoking) {
-            setBulkMembersPendingRevoke([]);
-          }
-        }}
+        onConfirm={() => void attemptRevokeMembers(bulkMembersPendingRevoke)}
+        onClose={() => { if (!isBulkRevoking) setBulkMembersPendingRevoke([]); }}
         isBusy={isBulkRevoking}
       />
       <ConfirmDialog
@@ -928,11 +1028,7 @@ export default function TeamPage() {
         description={`Revoke ${selectedInvites.length} pending invitation${selectedInvites.length !== 1 ? 's' : ''}? The recipients will no longer be able to join.`}
         confirmLabel="Revoke Invitations"
         onConfirm={() => { void handleBulkRevokeInvites(); }}
-        onClose={() => {
-          if (!isBulkRevokingInvites) {
-            setShowBulkRevokeInvitesConfirm(false);
-          }
-        }}
+        onClose={() => { if (!isBulkRevokingInvites) setShowBulkRevokeInvitesConfirm(false); }}
         isBusy={isBulkRevokingInvites}
       />
     </div>

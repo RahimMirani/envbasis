@@ -95,7 +95,11 @@ export default function GlobalAuditLogsPage() {
   // Load project list once for the project filter dropdown
   useEffect(() => {
     if (!accessToken || apiConfigError) return;
-    listProjects(accessToken).then(setProjects).catch(() => {});
+    listProjects(accessToken)
+      .then((projectList) => {
+        setProjects(projectList.filter((project) => project.can_view_audit_logs));
+      })
+      .catch(() => {});
   }, [accessToken, apiConfigError]);
 
   // Re-fetch logs whenever project or source filter changes

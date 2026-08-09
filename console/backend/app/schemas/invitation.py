@@ -14,6 +14,9 @@ class ProjectInvitationRead(BaseModel):
     email: EmailStr
     role: str
     can_push_pull_secrets: bool
+    can_manage_runtime_tokens: bool = False
+    can_manage_team: bool = False
+    can_view_audit_logs: bool = False
     invited_by_email: str | None = None
     status: str
     expires_at: datetime
@@ -31,6 +34,9 @@ class InvitationSummary(BaseModel):
     email: EmailStr
     role: str
     can_push_pull_secrets: bool
+    can_manage_runtime_tokens: bool = False
+    can_manage_team: bool = False
+    can_view_audit_logs: bool = False
     status: Literal["pending"] = "pending"
     expires_at: datetime
     created_at: datetime
@@ -44,6 +50,9 @@ class InvitationDetail(BaseModel):
     email: EmailStr
     role: str
     can_push_pull_secrets: bool
+    can_manage_runtime_tokens: bool = False
+    can_manage_team: bool = False
+    can_view_audit_logs: bool = False
     status: str
     expires_at: datetime
     created_at: datetime

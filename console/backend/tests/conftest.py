@@ -73,7 +73,12 @@ class Seeder:
 
     def project(self, owner: User, *, name: str = "envbasis") -> Project:
         with self.session_factory() as db:
-            project = Project(name=name, description="Test project", owner_id=owner.id)
+            project = Project(
+                name=name,
+                description="Test project",
+                owner_id=owner.id,
+                audit_log_visibility="owner_only",
+            )
             db.add(project)
             db.flush()
             db.add(
@@ -82,6 +87,8 @@ class Seeder:
                     user_id=owner.id,
                     role="owner",
                     can_push_pull_secrets=True,
+                    can_manage_runtime_tokens=True,
+                    can_manage_team=True,
                     invited_by=owner.id,
                 )
             )
@@ -102,7 +109,10 @@ class Seeder:
         *,
         project: Project,
         user: User,
-        can_push_pull_secrets: bool = True,
+        can_push_pull_secrets: bool = False,
+        can_manage_runtime_tokens: bool = False,
+        can_manage_team: bool = False,
+        can_view_audit_logs: bool = False,
         invited_by: User | None = None,
     ) -> ProjectMember:
         with self.session_factory() as db:
@@ -111,6 +121,9 @@ class Seeder:
                 user_id=user.id,
                 role="member",
                 can_push_pull_secrets=can_push_pull_secrets,
+                can_manage_runtime_tokens=can_manage_runtime_tokens,
+                can_manage_team=can_manage_team,
+                can_view_audit_logs=can_view_audit_logs,
                 invited_by=invited_by.id if invited_by is not None else None,
             )
             db.add(member)

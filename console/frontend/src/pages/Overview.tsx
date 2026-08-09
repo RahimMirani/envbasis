@@ -67,13 +67,15 @@ export default function OverviewPage() {
     projectBasePath,
     environments,
     currentEnv,
-    canManageProject,
     secretStats,
     isSecretStatsLoading,
     pageCache,
   } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
   const navigate = useNavigate();
+  const canManageTeam = currentProject.can_manage_team;
+  const canManageRuntimeTokens = currentProject.can_manage_runtime_tokens;
+  const canViewAuditLogs = currentProject.can_view_audit_logs;
   const overviewCacheKey = `overview:${currentProject.id}`;
   const cachedOverview = pageCache.get<OverviewCacheEntry>(overviewCacheKey);
   const [activityLogs, setActivityLogs] = useState<AuditLog[]>(() => cachedOverview?.activityLogs ?? []);
@@ -100,15 +102,19 @@ export default function OverviewPage() {
       setIsLoading(true);
 
       try {
-        if (currentProject.role === 'owner') {
+        if (currentProject.role === 'owner' || canViewAuditLogs || canManageTeam) {
           const [logs, invites] = await Promise.all([
-            listAuditLogs(currentProject.id, accessToken!, {
-              limit: 6,
-              signal: controller.signal,
-            }),
-            listProjectInvitations(currentProject.id, accessToken!, {
-              signal: controller.signal,
-            }),
+            canViewAuditLogs
+              ? listAuditLogs(currentProject.id, accessToken!, {
+                  limit: 6,
+                  signal: controller.signal,
+                })
+              : Promise.resolve([] as AuditLog[]),
+            canManageTeam
+              ? listProjectInvitations(currentProject.id, accessToken!, {
+                  signal: controller.signal,
+                })
+              : Promise.resolve([]),
           ]);
 
           if (isActive) {
@@ -145,7 +151,17 @@ export default function OverviewPage() {
       isActive = false;
       controller.abort();
     };
-  }, [accessToken, apiConfigError, cachedOverview, currentProject.id, currentProject.role, overviewCacheKey, pageCache]);
+  }, [
+    accessToken,
+    apiConfigError,
+    cachedOverview,
+    canManageTeam,
+    canViewAuditLogs,
+    currentProject.id,
+    currentProject.role,
+    overviewCacheKey,
+    pageCache,
+  ]);
 
   const stats = [
     {
@@ -213,7 +229,7 @@ export default function OverviewPage() {
           </p>
         </div>
         <div className="overview-hero-actions">
-          {canManageProject ? (
+          {canManageRuntimeTokens ? (
             <button
               className="btn btn-secondary"
               onClick={() => navigate(`${projectBasePath}/tokens`)}
@@ -223,14 +239,14 @@ export default function OverviewPage() {
               Create Token
             </button>
           ) : (
-            <OwnerOnlyHint message="Only project owners can create runtime tokens.">
+            <OwnerOnlyHint message="Only permitted managers can create runtime tokens.">
               <button className="btn btn-secondary" id="quick-create-token" disabled>
                 <Ticket size={14} />
                 Create Token
               </button>
             </OwnerOnlyHint>
           )}
-          {canManageProject ? (
+          {canManageTeam ? (
             <button
               className="btn btn-secondary"
               onClick={() => navigate(`${projectBasePath}/team`)}
@@ -240,7 +256,7 @@ export default function OverviewPage() {
               Invite
             </button>
           ) : (
-            <OwnerOnlyHint message="Only project owners can invite teammates to this project.">
+            <OwnerOnlyHint message="Only permitted managers can invite teammates to this project.">
               <button className="btn btn-secondary" id="quick-invite" disabled>
                 <UserPlus size={14} />
                 Invite
@@ -273,7 +289,7 @@ export default function OverviewPage() {
       </div>
 
       <div className={`overview-grid ${currentProject.role !== 'owner' ? 'overview-grid-member' : ''}`}>
-        {currentProject.role === 'owner' && (
+        {canViewAuditLogs && (
           <div className="overview-section">
             <div className="overview-section-header">
               <h3>Recent Activity</h3>

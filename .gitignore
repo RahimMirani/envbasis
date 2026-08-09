@@ -1,0 +1,86 @@
+# Sensitive local environment files
+.env
+.env.*
+!.env.example
+
+# EnvBasis local CLI state
+.envbasis.toml
+.envbasis/
+
+# Private roadmaps and working plans
+*FEATURES*.md
+*_INCOMING.md
+**/plan.md
+**/plan_*.md
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+tmp/
+temp/
+
+# Python environments, caches, coverage, and build output
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.eggs/
+*.egg-info/
+build/
+dist/
+
+# Node dependencies, caches, coverage, and generated metadata
+node_modules/
+.vite/
+.npm/
+.yarn/
+.pnpm-store/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Database dumps and local database files
+*.sql
+*.dump
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks

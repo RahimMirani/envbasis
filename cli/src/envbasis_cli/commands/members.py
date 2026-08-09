@@ -79,6 +79,11 @@ def register(root_app: typer.Typer) -> None:
             payload = _submit_revoke_request(client, project.id, request)
         except APIError as exc:
             if exc.status_code == 409 and not keep_shared_tokens and not revoke_shared_tokens:
+                if app_context.options.output_json:
+                    app_context.output.error(
+                        "Shared-token handling is required. Pass --keep-shared-tokens or --revoke-shared-tokens."
+                    )
+                    raise typer.Exit(code=1) from exc
                 app_context.output.error(str(exc))
                 app_context.output.info("Choose how to handle shared tokens:")
                 app_context.output.info("1. Keep shared tokens")

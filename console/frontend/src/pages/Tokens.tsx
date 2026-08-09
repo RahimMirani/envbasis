@@ -126,11 +126,11 @@ export default function TokensPage() {
     currentProject,
     currentEnv,
     environments,
-    canManageProject,
     onRuntimeTokenCountChanged,
     pageCache,
   } = useOutletContext<OutletContextType>();
   const { accessToken, apiConfigError } = useAuth();
+  const canManageRuntimeTokens = currentProject.can_manage_runtime_tokens;
   const tokensCacheKey = `tokens:${currentProject.id}`;
   const cachedTokensData = pageCache.get<TokensCacheEntry>(tokensCacheKey);
   const [tokens, setTokens] = useState<RuntimeToken[]>(() => cachedTokensData?.tokens ?? []);
@@ -394,7 +394,7 @@ export default function TokensPage() {
     });
 
     try {
-      const shares = await listRuntimeTokenShares(token.id, accessToken!);
+      const shares = await listRuntimeTokenShares(currentProject.id, token.id, accessToken!);
       setShareState((current) =>
         current.token?.id !== tokenId
           ? current
@@ -459,7 +459,7 @@ export default function TokensPage() {
     }));
 
     try {
-      const share = await shareRuntimeToken(shareState.token.id, accessToken!, { email });
+      const share = await shareRuntimeToken(currentProject.id, shareState.token.id, accessToken!, { email });
       setShareState((current) => ({
         ...current,
         shares: [...current.shares, share],
@@ -544,7 +544,7 @@ export default function TokensPage() {
           </p>
         </div>
         <div className="page-header-actions">
-          {canManageProject && (
+          {canManageRuntimeTokens && (
             <button
               className="btn btn-danger"
               onClick={() => setShowBulkRevokeConfirm(true)}
@@ -558,7 +558,7 @@ export default function TokensPage() {
             className="btn btn-primary"
             onClick={openCreateModal}
             id="create-token-btn"
-            disabled={!canManageProject || environments.length === 0}
+            disabled={!canManageRuntimeTokens || environments.length === 0}
           >
             <Plus size={14} />
             Create Token
@@ -566,10 +566,10 @@ export default function TokensPage() {
         </div>
       </div>
 
-      {!canManageProject && (
+      {!canManageRuntimeTokens && (
         <p className="token-note">
-          You only see runtime tokens that were shared with you. Project owners control creation,
-          sharing, and revocation.
+          You can view runtime tokens in this project, but only permitted managers can create, share,
+          or revoke them.
         </p>
       )}
 
@@ -590,15 +590,15 @@ export default function TokensPage() {
         <div className="empty-state">
           <h3>No runtime tokens found</h3>
           <p>
-            {canManageProject
+            {canManageRuntimeTokens
               ? currentEnv === 'all'
                 ? 'Create the first runtime token for this project.'
                 : `No runtime tokens found for ${currentEnv}.`
               : currentEnv === 'all'
-                ? 'No runtime tokens are currently shared with you in this project.'
-                : `No runtime tokens shared with you for ${currentEnv}.`}
+                ? 'No runtime tokens have been created for this project yet.'
+                : `No runtime tokens found for ${currentEnv}.`}
           </p>
-          {canManageProject && (
+          {canManageRuntimeTokens && (
             <button className="btn btn-primary" onClick={openCreateModal}>
               <Plus size={14} />
               Create Token
@@ -611,7 +611,7 @@ export default function TokensPage() {
             <table id="tokens-table">
               <thead>
                 <tr>
-                  {canManageProject && (
+                  {canManageRuntimeTokens && (
                     <th style={{ width: 40 }}>
                       <Checkbox
                         checked={allRevokeableSelected}
@@ -642,7 +642,7 @@ export default function TokensPage() {
 
                   return (
                     <tr key={token.id}>
-                      {canManageProject && (
+                      {canManageRuntimeTokens && (
                         <td className="table-checkbox-cell">
                           {status !== 'revoked' && (
                             <Checkbox
@@ -687,7 +687,7 @@ export default function TokensPage() {
                             <Eye size={12} />
                             Reveal
                           </button>
-                          {canManageProject && (
+                          {canManageRuntimeTokens && (
                             <button
                               className="btn btn-ghost btn-sm"
                               onClick={() => openShareModal(token)}
@@ -697,7 +697,7 @@ export default function TokensPage() {
                               Share
                             </button>
                           )}
-                          {canManageProject && status !== 'revoked' && (
+                          {canManageRuntimeTokens && status !== 'revoked' && (
                             <button
                               className="btn btn-danger btn-sm"
                               id={`revoke-${token.id}`}

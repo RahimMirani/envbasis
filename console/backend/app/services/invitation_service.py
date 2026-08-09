@@ -112,6 +112,9 @@ def invitation_to_read(
         email=invitation.email,
         role=invitation.role,
         can_push_pull_secrets=invitation.can_push_pull_secrets,
+        can_manage_runtime_tokens=invitation.can_manage_runtime_tokens,
+        can_manage_team=invitation.can_manage_team,
+        can_view_audit_logs=invitation.can_view_audit_logs,
         invited_by_email=inviter_email,
         status=invitation.status,
         expires_at=invitation.expires_at,
@@ -142,6 +145,9 @@ def create_or_resend_invitation(
     invited_email: str,
     role: str,
     can_push_pull_secrets: bool,
+    can_manage_runtime_tokens: bool,
+    can_manage_team: bool,
+    can_view_audit_logs: bool,
     invited_by: User,
 ) -> InviteMemberResponse:
     normalized = normalize_invite_email(invited_email)
@@ -188,6 +194,9 @@ def create_or_resend_invitation(
         assert_can_send(pending)
         pending.role = role
         pending.can_push_pull_secrets = can_push_pull_secrets
+        pending.can_manage_runtime_tokens = can_manage_runtime_tokens
+        pending.can_manage_team = can_manage_team
+        pending.can_view_audit_logs = can_view_audit_logs
         pending.invited_by_user_id = invited_by.id
         if pending.expires_at <= utcnow():
             pending.expires_at = utcnow() + timedelta(days=INVITE_EXPIRY_DAYS)
@@ -216,6 +225,9 @@ def create_or_resend_invitation(
             email_normalized=normalized,
             role=role,
             can_push_pull_secrets=can_push_pull_secrets,
+            can_manage_runtime_tokens=can_manage_runtime_tokens,
+            can_manage_team=can_manage_team,
+            can_view_audit_logs=can_view_audit_logs,
             invited_by_user_id=invited_by.id,
             status="pending",
             invite_token_hash=token_hash,
@@ -235,6 +247,9 @@ def create_or_resend_invitation(
                 "email": normalized,
                 "role": role,
                 "can_push_pull_secrets": can_push_pull_secrets,
+                "can_manage_runtime_tokens": can_manage_runtime_tokens,
+                "can_manage_team": can_manage_team,
+                "can_view_audit_logs": can_view_audit_logs,
             },
         )
 
@@ -331,6 +346,9 @@ def list_invitations_for_user(db: Session, *, user: User) -> list[InvitationSumm
                 email=invitation.email,
                 role=invitation.role,
                 can_push_pull_secrets=invitation.can_push_pull_secrets,
+                can_manage_runtime_tokens=invitation.can_manage_runtime_tokens,
+                can_manage_team=invitation.can_manage_team,
+                can_view_audit_logs=invitation.can_view_audit_logs,
                 expires_at=invitation.expires_at,
                 created_at=invitation.created_at,
             )
@@ -381,6 +399,9 @@ def get_invitation_by_token_for_user(
         email=invitation.email,
         role=invitation.role,
         can_push_pull_secrets=invitation.can_push_pull_secrets,
+        can_manage_runtime_tokens=invitation.can_manage_runtime_tokens,
+        can_manage_team=invitation.can_manage_team,
+        can_view_audit_logs=invitation.can_view_audit_logs,
         status=invitation.status,
         expires_at=invitation.expires_at,
         created_at=invitation.created_at,
@@ -430,6 +451,9 @@ def accept_invitation(
             email=user.email,
             role=existing.role,
             can_push_pull_secrets=existing.can_push_pull_secrets,
+            can_manage_runtime_tokens=existing.can_manage_runtime_tokens,
+            can_manage_team=existing.can_manage_team,
+            can_view_audit_logs=existing.can_view_audit_logs,
             joined_at=existing.created_at,
         )
 
@@ -440,6 +464,9 @@ def accept_invitation(
         user_id=user.id,
         role=role_final,
         can_push_pull_secrets=invitation.can_push_pull_secrets,
+        can_manage_runtime_tokens=invitation.can_manage_runtime_tokens,
+        can_manage_team=invitation.can_manage_team,
+        can_view_audit_logs=invitation.can_view_audit_logs,
         invited_by=invitation.invited_by_user_id,
     )
     db.add(membership)
@@ -455,6 +482,9 @@ def accept_invitation(
             "email": invitation.email_normalized,
             "role": role_final,
             "can_push_pull_secrets": invitation.can_push_pull_secrets,
+            "can_manage_runtime_tokens": invitation.can_manage_runtime_tokens,
+            "can_manage_team": invitation.can_manage_team,
+            "can_view_audit_logs": invitation.can_view_audit_logs,
         },
     )
     db.commit()
@@ -464,6 +494,9 @@ def accept_invitation(
         email=user.email,
         role=membership.role,
         can_push_pull_secrets=membership.can_push_pull_secrets,
+        can_manage_runtime_tokens=membership.can_manage_runtime_tokens,
+        can_manage_team=membership.can_manage_team,
+        can_view_audit_logs=membership.can_view_audit_logs,
         joined_at=membership.created_at,
     )
 

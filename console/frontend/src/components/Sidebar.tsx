@@ -42,6 +42,7 @@ interface SidebarProps {
   currentProjectId: string;
   projectName: string;
   projectRole: 'owner' | 'member';
+  canViewAuditLogs: boolean;
   projects: Project[];
   open?: boolean;
   onClose?: () => void;
@@ -62,6 +63,7 @@ export default function Sidebar({
   currentProjectId,
   projectName,
   projectRole,
+  canViewAuditLogs,
   projects,
   open = false,
   onClose,
@@ -81,7 +83,7 @@ export default function Sidebar({
     { to: `${basePath}/environments`, icon: GitBranch, label: 'Environments' },
     { to: `${basePath}/team`, icon: Users, label: 'Team' },
     { to: `${basePath}/tokens`, icon: Ticket, label: 'Runtime Tokens' },
-    { to: `${basePath}/audit`, icon: ScrollText, label: 'Audit Logs', ownerOnly: true },
+    { to: `${basePath}/audit`, icon: ScrollText, label: 'Audit Logs', locked: !canViewAuditLogs },
     { to: `${basePath}/webhooks`, icon: Webhook, label: 'Webhooks', ownerOnly: true },
     { to: `${basePath}/settings`, icon: Settings, label: 'Settings', ownerOnly: true },
   ];
@@ -139,6 +141,7 @@ export default function Sidebar({
     setIsProjectMenuOpen(false);
     setProjectSearch('');
     setDiscoveryState(markProjectVisited(project.id));
+    if (onClose) onClose();
     navigate(`/projects/${project.id}/overview`);
   };
 
@@ -164,7 +167,7 @@ export default function Sidebar({
   return (
     <aside className={`sidebar${open ? ' sidebar-open' : ''}`}>
       <div className="sidebar-header">
-        <Link to="/" className="sidebar-back-btn">
+        <Link to="/" className="sidebar-back-btn" onClick={handleNavClick}>
           <ArrowLeft size={14} />
           <span>All Projects</span>
         </Link>
@@ -244,7 +247,7 @@ export default function Sidebar({
               )}
             </div>
             <div className="project-switcher-footer">
-              <Link to="/" onClick={() => setIsProjectMenuOpen(false)}>
+              <Link to="/" onClick={() => { setIsProjectMenuOpen(false); if (onClose) onClose(); }}>
                 View all projects
               </Link>
             </div>
@@ -254,13 +257,18 @@ export default function Sidebar({
 
       <nav className="sidebar-nav">
         {links.map((link) => {
-          const isLocked = Boolean(link.ownerOnly) && projectRole !== 'owner';
+          const isLocked =
+            (Boolean(link.ownerOnly) && projectRole !== 'owner') || Boolean(link.locked);
 
           if (isLocked) {
             return (
               <OwnerOnlyHint
                 key={link.to}
-                message={`${link.label} is available to project owners only.`}
+                message={
+                  link.ownerOnly
+                    ? `${link.label} is available to project owners only.`
+                    : `${link.label} is not enabled for members in this project.`
+                }
                 className="sidebar-owner-only-hint"
               >
                 <button
@@ -275,7 +283,9 @@ export default function Sidebar({
                     <link.icon size={16} className="sidebar-link-icon" />
                     <span>{link.label}</span>
                   </span>
-                  <span className="owner-only-chip owner-only-chip-sidebar">Owner only</span>
+                  <span className="owner-only-chip owner-only-chip-sidebar">
+                    {link.ownerOnly ? 'Owner only' : 'Restricted'}
+                  </span>
                 </button>
               </OwnerOnlyHint>
             );

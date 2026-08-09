@@ -8,10 +8,10 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from app.api.deps import ProjectAccess, get_current_user, require_project_owner
+from app.api.deps import ProjectAccess, get_current_user, require_audit_log_access
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
 from app.models.cli_auth_audit_log import CliAuthAuditLog
@@ -21,7 +21,7 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
 from app.schemas.audit_log import AuditLogRead, UnifiedAuditLogListResponse, UnifiedAuditLogRead
-from app.services.audit import maybe_cleanup_old_audit_logs
+from app.services.audit import maybe_cleanup_old_audit_logs, write_audit_log
 
 router = APIRouter(prefix="/projects")
 unified_router = APIRouter(prefix="/audit-logs")
@@ -67,7 +67,8 @@ def _parse_cursor(cursor: str | None) -> datetime | None:
 def list_audit_logs(
     project_id: uuid.UUID,
     limit: int = Query(default=100, ge=1, le=500),
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_audit_log_access),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[AuditLogRead]:
     maybe_cleanup_old_audit_logs(db)
@@ -83,7 +84,7 @@ def list_audit_logs(
         .limit(limit)
     ).all()
 
-    return [
+    response = [
         AuditLogRead(
             id=audit_log.id,
             project_id=audit_log.project_id,
@@ -97,13 +98,23 @@ def list_audit_logs(
         )
         for audit_log, actor_email, environment_name in rows
     ]
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="audit_logs.viewed",
+        metadata={"limit": limit},
+    )
+    db.commit()
+    return response
 
 
 @router.get("/{project_id}/audit-logs/export")
 def export_audit_logs(
     project_id: uuid.UUID,
     format: str = Query(default="json", pattern="^(json|csv)$"),
-    project_access: ProjectAccess = Depends(require_project_owner),
+    project_access: ProjectAccess = Depends(require_audit_log_access),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     actor = aliased(User)
@@ -120,6 +131,14 @@ def export_audit_logs(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     filename = f"audit-logs-{project_id}-{timestamp}.{format}"
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="audit_logs.exported",
+        metadata={"format": format},
+    )
+    db.commit()
 
     if format == "csv":
         buf = io.StringIO()
@@ -181,7 +200,21 @@ def list_unified_audit_logs(
             ProjectMember,
             (ProjectMember.project_id == Project.id) & (ProjectMember.user_id == current_user.id),
         )
-        .where(or_(Project.owner_id == current_user.id, ProjectMember.user_id == current_user.id))
+        .where(
+            or_(
+                Project.owner_id == current_user.id,
+                and_(
+                    ProjectMember.user_id == current_user.id,
+                    or_(
+                        Project.audit_log_visibility == "members",
+                        and_(
+                            Project.audit_log_visibility == "specific",
+                            ProjectMember.can_view_audit_logs.is_(True),
+                        ),
+                    ),
+                ),
+            )
+        )
     ).all()
     project_ids = list(accessible_project_ids)
 

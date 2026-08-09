@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
@@ -28,4 +28,5 @@ class RuntimeTokenShare(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    can_manage: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

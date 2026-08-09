@@ -25,7 +25,10 @@ class ProjectMember(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         nullable=False,
     )
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="member")
-    can_push_pull_secrets: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    can_push_pull_secrets: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_manage_runtime_tokens: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_manage_team: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_view_audit_logs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     invited_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
