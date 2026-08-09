@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import (
     ProjectAccess,
     enforce_project_permission,
+    enforce_machine_secret_key,
     get_current_user,
     get_project_access,
     require_project_owner,
@@ -118,6 +119,7 @@ def list_secret_versions(
     selected_path = normalize_secret_path(path)
     enforce_project_permission(db, project_access=project_access, resource="secrets", action="list", environment_id=environment.id, path=selected_path, legacy_allowed=True)
     key = _validate_secret_key(secret_key)
+    enforce_machine_secret_key(project_access, key)
     rows = get_secret_versions(
         db,
         environment_id=environment.id,
@@ -168,6 +170,7 @@ def reveal_secret_version(
     selected_path = normalize_secret_path(path)
     enforce_project_permission(db, project_access=project_access, resource="secrets", action="read", environment_id=environment.id, path=selected_path, legacy_allowed=project_access.can_push_pull_secrets)
     key = _validate_secret_key(secret_key)
+    enforce_machine_secret_key(project_access, key)
     row = _historical_row_or_404(
         db,
         environment_id=environment.id,
@@ -225,6 +228,7 @@ def rollback_secret_version(
     selected_path = normalize_secret_path(path)
     enforce_project_permission(db, project_access=project_access, resource="secrets", action="write", environment_id=environment.id, path=selected_path, legacy_allowed=project_access.can_push_pull_secrets)
     key = _validate_secret_key(secret_key)
+    enforce_machine_secret_key(project_access, key)
     source = _historical_row_or_404(
         db, environment_id=environment.id, path=selected_path, key=key, version=version
     )
