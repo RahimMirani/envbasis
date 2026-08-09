@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.api.deps import (
     get_project_access,
     require_runtime_token_management,
 )
+from app.api.pagination import paginate_items
 from app.db.session import get_db
 from app.models.project import Project
 from app.models.project_member import ProjectMember
@@ -33,7 +35,7 @@ from app.schemas.runtime_token_share import (
     RuntimeTokenShareRequest,
 )
 from app.services.audit import write_audit_log
-from app.services.crypto import decrypt_text, encrypt_text
+from app.services.crypto import decrypt_text
 from app.services.environments import get_project_environment_or_404
 from app.services.runtime_tokens import (
     generate_runtime_token,
@@ -45,7 +47,9 @@ router = APIRouter()
 
 
 def _serialize_runtime_token(token: RuntimeToken) -> RuntimeTokenRead:
-    return RuntimeTokenRead.model_validate(token)
+    return RuntimeTokenRead.model_validate(token).model_copy(
+        update={"is_revealable": token.encrypted_token is not None}
+    )
 
 
 def _ensure_shareable_runtime_token(token: RuntimeToken) -> None:
@@ -63,7 +67,10 @@ def _ensure_shareable_runtime_token(token: RuntimeToken) -> None:
     if token.encrypted_token is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This runtime token cannot be shared or revealed. Create a new token first.",
+            detail=(
+                "This credential was displayed once and cannot be shared or revealed. "
+                "Create a separate token for each machine."
+            ),
         )
 
 
@@ -97,6 +104,7 @@ def create_runtime_token(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     payload: RuntimeTokenCreateRequest,
+    response: Response,
     project_access: ProjectAccess = Depends(require_runtime_token_management),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -113,7 +121,7 @@ def create_runtime_token(
     name = payload.name.strip()
     if not name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Runtime token name cannot be empty.",
         )
     existing_token = db.scalar(
@@ -131,7 +139,7 @@ def create_runtime_token(
 
     if payload.expires_at is not None and payload.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Runtime token expiry must be in the future.",
         )
 
@@ -140,7 +148,7 @@ def create_runtime_token(
         project_id=project_access.project.id,
         environment_id=environment.id,
         token_hash=hash_runtime_token(plaintext_token),
-        encrypted_token=encrypt_text(plaintext_token),
+        encrypted_token=None,
         name=name,
         expires_at=payload.expires_at,
         created_by=current_user.id,
@@ -156,9 +164,12 @@ def create_runtime_token(
         metadata={"token_id": str(token.id), "name": token.name},
     )
     webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="runtime_token.created")
+    dispatch_webhooks(webhook_targets, db=db, event="runtime_token.created", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"token_id": str(token.id), "name": token.name})
     db.commit()
     db.refresh(token)
-    dispatch_webhooks(webhook_targets, event="runtime_token.created", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"token_id": str(token.id), "name": token.name})
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return RuntimeTokenCreateResponse(
         id=token.id,
         project_id=token.project_id,
@@ -168,6 +179,7 @@ def create_runtime_token(
         created_by=token.created_by,
         revoked_at=token.revoked_at,
         last_used_at=token.last_used_at,
+        is_revealable=False,
         plaintext_token=plaintext_token,
     )
 
@@ -175,6 +187,9 @@ def create_runtime_token(
 @router.get("/projects/{project_id}/runtime-tokens", response_model=list[RuntimeTokenRead])
 def list_runtime_tokens(
     project_id: uuid.UUID,
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(get_project_access),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -198,7 +213,12 @@ def list_runtime_tokens(
             )
             .order_by(RuntimeToken.name.asc())
         ).all()
-    return [_serialize_runtime_token(token) for token in tokens]
+    return paginate_items(
+        [_serialize_runtime_token(token) for token in tokens],
+        limit=limit,
+        offset=offset,
+        response=response,
+    )
 
 
 def _get_token_in_project_or_404(
@@ -309,6 +329,9 @@ def share_runtime_token(
 def list_runtime_token_shares(
     project_id: uuid.UUID,
     token_id: uuid.UUID,
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(require_runtime_token_management),
     db: Session = Depends(get_db),
 ) -> list[RuntimeTokenShareRead]:
@@ -323,7 +346,7 @@ def list_runtime_token_shares(
         .where(RuntimeTokenShare.runtime_token_id == token.id)
         .order_by(RuntimeTokenShare.created_at.asc())
     ).all()
-    return [
+    shares = [
         RuntimeTokenShareRead(
             id=share.id,
             runtime_token_id=share.runtime_token_id,
@@ -335,6 +358,7 @@ def list_runtime_token_shares(
         )
         for share, email in rows
     ]
+    return paginate_items(shares, limit=limit, offset=offset, response=response)
 
 
 @router.post(
@@ -439,8 +463,8 @@ def revoke_runtime_token_by_name(
     _wh_project_id = project_access.project.id
     _wh_env_id = token.environment_id
     db.delete(token)
+    dispatch_webhooks(webhook_targets, db=db, event="runtime_token.revoked", project_id=_wh_project_id, environment_id=_wh_env_id, actor_user_id=current_user.id, metadata=_wh_meta)
     db.commit()
-    dispatch_webhooks(webhook_targets, event="runtime_token.revoked", project_id=_wh_project_id, environment_id=_wh_env_id, actor_user_id=current_user.id, metadata=_wh_meta)
     return MessageResponse(detail="Runtime token revoked.")
 
 
@@ -567,6 +591,6 @@ def revoke_runtime_token(
     _wh_meta = {"token_id": str(token.id), "name": token.name}
     _wh_env_id = token.environment_id
     db.delete(token)
+    dispatch_webhooks(webhook_targets, db=db, event="runtime_token.revoked", project_id=project.id, environment_id=_wh_env_id, actor_user_id=current_user.id, metadata=_wh_meta)
     db.commit()
-    dispatch_webhooks(webhook_targets, event="runtime_token.revoked", project_id=project.id, environment_id=_wh_env_id, actor_user_id=current_user.id, metadata=_wh_meta)
     return MessageResponse(detail="Runtime token revoked.")
