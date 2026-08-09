@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,39 +7,80 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.exceptions import register_exception_handlers
+from app.core.logging import configure_logging
+from app.core.metrics import request_metrics
 from app.core.middleware import (
     apply_response_headers,
     assign_request_id,
     build_rate_limit_response,
+    build_rate_limiter_unavailable_response,
     rate_limiter,
+    RateLimiterUnavailable,
 )
 from app.db.session import SessionLocal
 from app.services.audit import cleanup_old_audit_logs
 from app.services.crypto import ensure_secrets_master_key_configured
+from app.services.api_idempotency import execute_idempotent_request
 
 logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     app = FastAPI(
         title=settings.app_name,
         debug=settings.debug,
         version="0.1.0",
     )
+    register_exception_handlers(app)
 
     @app.middleware("http")
     async def operational_middleware(request: Request, call_next):
+        started_at = perf_counter()
         request_id = assign_request_id(request)
-        rate_limit_result = rate_limiter.check(request)
-        if not rate_limit_result.allowed:
-            response = build_rate_limit_response(
-                request_id=request_id,
-                retry_after_seconds=rate_limit_result.retry_after_seconds,
-            )
+        status_code = 500
+        rate_limit_rule: str | None = None
+        try:
+            try:
+                rate_limit_result = rate_limiter.check(request)
+                rate_limit_rule = rate_limit_result.rule_name
+            except RateLimiterUnavailable:
+                response = build_rate_limiter_unavailable_response(request_id=request_id)
+            else:
+                if not rate_limit_result.allowed:
+                    response = build_rate_limit_response(
+                        request_id=request_id,
+                        retry_after_seconds=rate_limit_result.retry_after_seconds,
+                    )
+                else:
+                    response = await execute_idempotent_request(request, call_next)
+            status_code = response.status_code
             return apply_response_headers(request, response, request_id=request_id)
-
-        response = await call_next(request)
-        return apply_response_headers(request, response, request_id=request_id)
+        finally:
+            duration_seconds = perf_counter() - started_at
+            route_object = request.scope.get("route")
+            route = getattr(route_object, "path", None) or "unmatched"
+            request_metrics.observe(
+                method=request.method,
+                route=route,
+                status_code=status_code,
+                duration_seconds=duration_seconds,
+            )
+            logger.log(
+                logging.ERROR if status_code >= 500 else logging.INFO,
+                "http_request",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "route": route,
+                    "status_code": status_code,
+                    "duration_ms": round(duration_seconds * 1000, 3),
+                    "client_ip": request.client.host if request.client else "unknown",
+                    "rate_limit_rule": rate_limit_rule,
+                },
+            )
 
     if settings.cors_allowed_origins:
         app.add_middleware(
@@ -46,7 +88,18 @@ def create_app() -> FastAPI:
             allow_origins=settings.cors_allowed_origins,
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
+            expose_headers=[
+                "Deprecation",
+                "Idempotency-Replayed",
+                "Link",
+                "Sunset",
+                "X-API-Version",
+                "X-Limit",
+                "X-Offset",
+                "X-Request-ID",
+                "X-Total-Count",
+            ],
         )
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
