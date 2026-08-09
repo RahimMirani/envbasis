@@ -86,7 +86,7 @@ def test_webhook_create_list_delete_and_list_events(session_factory, seeder) -> 
 def test_webhook_signing_secret_is_stored_encrypted(session_factory, seeder) -> None:
     owner = seeder.user("owner-webhook-crypto@example.com")
     project = seeder.project(owner, name="webhook-crypto")
-    access = ProjectAccess(project=project, role="owner", can_push_pull_secrets=True)
+    access = _owner_access(project)
 
     with session_factory() as db:
         created = create_webhook(
