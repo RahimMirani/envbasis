@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.pagination import paginate_items
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.common import MessageResponse
@@ -23,10 +25,18 @@ router = APIRouter(prefix="/me")
 
 @router.get("/invitations", response_model=list[InvitationSummary])
 def get_my_invitations(
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[InvitationSummary]:
-    return list_invitations_for_user(db, user=current_user)
+    return paginate_items(
+        list_invitations_for_user(db, user=current_user),
+        limit=limit,
+        offset=offset,
+        response=response,
+    )
 
 
 @router.get("/invitations/by-token/{token}", response_model=InvitationDetail)
