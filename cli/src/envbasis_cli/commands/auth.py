@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import os
 import time
 import webbrowser
 
@@ -16,9 +17,39 @@ from envbasis_cli.contracts import Endpoint, UserProfile, build_path
 
 def register(app: typer.Typer) -> None:
     @app.command("login")
-    def login(ctx: typer.Context) -> None:
+    def login(
+        ctx: typer.Context,
+        method: str = typer.Option("browser", "--method", help="browser or universal-auth"),
+        client_id: str | None = typer.Option(None, "--client-id", envvar="ENVBASIS_CLIENT_ID"),
+        client_secret: str | None = typer.Option(None, "--client-secret", envvar="ENVBASIS_CLIENT_SECRET", hide_input=True),
+        plain: bool = typer.Option(False, "--plain", help="Print only the access token."),
+    ) -> None:
         app_context = require_app_context(ctx)
         api_url = require_api_url(app_context)
+
+        if method == "universal-auth":
+            resolved_client_id = client_id or os.getenv("ENVBASIS_CLIENT_ID")
+            resolved_client_secret = client_secret or os.getenv("ENVBASIS_CLIENT_SECRET")
+            if not resolved_client_id or not resolved_client_secret:
+                app_context.output.error("Universal auth requires --client-id and --client-secret (or ENVBASIS_CLIENT_ID and ENVBASIS_CLIENT_SECRET).")
+                raise typer.Exit(code=1)
+            try:
+                token = app_context.auth_manager.exchange_universal_credentials(api_url, client_id=resolved_client_id, client_secret=resolved_client_secret)
+            except AuthError as exc:
+                app_context.output.error(str(exc))
+                raise typer.Exit(code=1) from exc
+            if plain:
+                typer.echo(token.access_token)
+            elif app_context.options.output_json:
+                app_context.output.emit_json(token.model_dump())
+            else:
+                app_context.output.success("Universal authentication succeeded.")
+                app_context.output.write(token.access_token)
+                app_context.output.info("Export this short-lived token as ENVBASIS_TOKEN.")
+            return
+        if method != "browser":
+            app_context.output.error("--method must be browser or universal-auth.")
+            raise typer.Exit(code=1)
 
         try:
             start = app_context.auth_manager.start_device_login(
