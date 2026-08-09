@@ -24,6 +24,7 @@ from app.models.access_role import AccessRole, AccessRoleAssignment
 from app.models.environment import Environment
 from app.models.project import Project
 from app.models.organization import Organization
+from app.models.machine_identity import MachineIdentity
 from app.models.project_member import ProjectMember
 from app.models.runtime_token import RuntimeToken
 from app.models.runtime_token_share import RuntimeTokenShare
@@ -510,6 +511,23 @@ def list_projects(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ProjectRead]:
+    machine_identity_id = getattr(current_user, "_machine_identity_id", None)
+    if machine_identity_id is not None:
+        machine = db.get(MachineIdentity, machine_identity_id)
+        if machine is None:
+            return []
+        if machine.project_id is not None:
+            machine_projects = [db.get(Project, machine.project_id)]
+        else:
+            assigned_project_ids = select(AccessRole.project_id).join(AccessRoleAssignment).where(AccessRoleAssignment.machine_identity_id == machine.id, AccessRole.project_id.is_not(None))
+            assigned_org_ids = select(AccessRole.organization_id).join(AccessRoleAssignment).where(AccessRoleAssignment.machine_identity_id == machine.id, AccessRole.organization_id.is_not(None))
+            machine_projects = list(db.scalars(select(Project).where(Project.organization_id == machine.organization_id, or_(Project.id.in_(assigned_project_ids), Project.organization_id.in_(assigned_org_ids))).order_by(Project.created_at.desc())).all())
+        valid_projects = [project for project in machine_projects if project is not None]
+        paged = paginate_items(valid_projects, limit=limit, offset=offset, response=response)
+        stats_map = _get_project_stats_map(db, project_ids=[project.id for project in paged])
+        can_read = "secrets:read" in machine.allowed_actions
+        return [_serialize_project(project, ROLE_MEMBER, can_manage_secrets=can_read, can_manage_runtime_tokens=False, can_manage_team=False, can_view_audit_logs=False, stats_map=stats_map) for project in paged]
+
     membership = aliased(ProjectMember)
     assigned_project_ids = select(AccessRole.project_id).join(
         AccessRoleAssignment, AccessRoleAssignment.role_id == AccessRole.id
