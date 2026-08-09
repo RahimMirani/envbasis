@@ -63,7 +63,11 @@ def fetch_runtime_secrets(
 
     latest_rows = get_latest_secret_rows(db, environment_id=runtime_token.environment_id)
     try:
-        secrets, _ = build_secret_payload(latest_rows)
+        secrets, _ = build_secret_payload(
+            db,
+            project_id=runtime_token.project_id,
+            secret_rows=latest_rows,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
