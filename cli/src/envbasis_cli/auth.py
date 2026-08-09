@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -9,13 +10,14 @@ import keyring
 from keyring.errors import KeyringError
 from pydantic import AnyHttpUrl, BaseModel, SecretStr
 
-from envbasis_cli.contracts import Endpoint, UserProfile, build_path
+from envbasis_cli.contracts import Endpoint, MachineTokenResponse, UserProfile, build_path
 
 
 SERVICE_NAME = "envbasis-cli"
 SESSION_USERNAME = "auth-session"
 REFRESH_SKEW_SECONDS = 60
 DEFAULT_POLL_INTERVAL_SECONDS = 5
+TOKEN_ENV_VAR = "ENVBASIS_TOKEN"
 
 
 class AuthError(RuntimeError):
@@ -209,6 +211,9 @@ class AuthManager:
         )
 
     def get_valid_access_token(self, api_url: str, *, force_refresh: bool = False) -> str:
+        environment_token = os.getenv(TOKEN_ENV_VAR)
+        if environment_token:
+            return environment_token
         session = self.load_session()
         if session is None:
             raise AuthError("You are not logged in.")
@@ -219,8 +224,24 @@ class AuthManager:
         return session.access_token.get_secret_value()
 
     def needs_refresh(self) -> bool:
+        if os.getenv(TOKEN_ENV_VAR):
+            return False
         session = self.load_session()
         return session is not None and self._should_refresh(session)
+
+    def exchange_universal_credentials(
+        self, api_url: str, *, client_id: str, client_secret: str
+    ) -> MachineTokenResponse:
+        payload = self._request_json(
+            api_url,
+            Endpoint.MACHINE_AUTH_TOKEN,
+            {"client_id": client_id, "client_secret": client_secret},
+            default_error="Universal authentication failed.",
+        )
+        try:
+            return MachineTokenResponse.model_validate(payload)
+        except ValueError as exc:
+            raise AuthError("Backend returned an invalid universal-auth response.") from exc
 
     def _request_json(
         self,
