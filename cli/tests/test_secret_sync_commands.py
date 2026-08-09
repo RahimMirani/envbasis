@@ -427,7 +427,7 @@ def test_pull_stdout_json_uses_saved_environment(monkeypatch, tmp_path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["pull", "--stdout", "--format", "json"])
+    result = runner.invoke(app, ["secrets", "pull", "--stdout", "--format", "json"])
 
     assert result.exit_code == 0
     assert json.loads(result.output) == {"DEBUG": "true", "OPENAI_API_KEY": "sk-test"}
@@ -478,7 +478,7 @@ def test_pull_writes_dotenv_file_when_confirmed(monkeypatch, tmp_path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["pull", "--file", str(output_path)], input="y\n")
+    result = runner.invoke(app, ["secrets", "pull", "--file", str(output_path)], input="y\n")
 
     assert result.exit_code == 0
     assert output_path.read_text(encoding="utf-8") == 'DEBUG="true value"\nOPENAI_API_KEY=sk-test\n'
@@ -528,7 +528,7 @@ def test_pull_aborts_when_overwrite_is_declined(monkeypatch, tmp_path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["pull", "--file", str(output_path)], input="n\n")
+    result = runner.invoke(app, ["secrets", "pull", "--file", str(output_path)], input="n\n")
 
     assert result.exit_code == 1
     assert output_path.read_text(encoding="utf-8") == "OLD=value\n"
@@ -579,7 +579,7 @@ def test_pull_overwrite_skips_prompt(monkeypatch, tmp_path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["pull", "--file", str(output_path), "--overwrite"])
+    result = runner.invoke(app, ["secrets", "pull", "--file", str(output_path), "--overwrite"])
 
     assert result.exit_code == 0
     assert output_path.read_text(encoding="utf-8") == "OPENAI_API_KEY=sk-overwrite\n"
@@ -630,11 +630,111 @@ def test_secrets_list_hides_values_by_default(monkeypatch, tmp_path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["secrets", "list"])
+    result = runner.invoke(app, ["secret"])
 
     assert result.exit_code == 0
     assert "OPENAI_API_KEY" in result.output
     assert "sk-secret" not in result.output
+
+
+def test_secret_shortcut_prompts_for_context_and_lists_names_only(monkeypatch, tmp_path) -> None:
+    token_store = FakeTokenStore()
+    config_path = tmp_path / ".envbasis.toml"
+    config_path.write_text(
+        'api_base_url = "https://api.example.com/api/v1"\n',
+        encoding="utf-8",
+    )
+    _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [
+                    {"id": "proj_1", "name": "first-app"},
+                    {"id": "proj_2", "name": "my-ai-app"},
+                ],
+                "auth": "secret-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_2/environments",
+                "status_code": 200,
+                "payload": [
+                    {"id": "env_1", "name": "dev"},
+                    {"id": "env_2", "name": "prod"},
+                ],
+                "auth": "secret-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_2/environments/env_2/secrets",
+                "status_code": 200,
+                "payload": {
+                    "project_id": "proj_2",
+                    "environment_id": "env_2",
+                    "secrets": [
+                        {"key": "DATABASE_URL", "path": "/", "version": 1},
+                        {"key": "OPENAI_API_KEY", "path": "/", "version": 2},
+                    ],
+                },
+                "auth": "secret-token",
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["secret"], input="2\n2\n")
+
+    assert result.exit_code == 0
+    assert "DATABASE_URL" in result.output
+    assert "OPENAI_API_KEY" in result.output
+    assert "Version" not in result.output
+    config_text = config_path.read_text(encoding="utf-8")
+    assert 'project_id = "proj_2"' in config_text
+    assert 'environment = "prod"' in config_text
+
+
+def test_secrets_pull_is_available_under_secrets_group(monkeypatch, tmp_path) -> None:
+    token_store = FakeTokenStore()
+    config_path = tmp_path / ".envbasis.toml"
+    config_path.write_text(
+        'api_base_url = "https://api.example.com/api/v1"\nproject_id = "proj_1"\nproject_name = "my-ai-app"\nenvironment = "prod"\n',
+        encoding="utf-8",
+    )
+    _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [{"id": "proj_1", "name": "my-ai-app"}],
+                "auth": "secret-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_1/environments",
+                "status_code": 200,
+                "payload": [{"id": "env_1", "name": "prod"}],
+                "auth": "secret-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_1/environments/env_1/secrets/pull",
+                "status_code": 200,
+                "payload": {"secrets": {"DATABASE_URL": "postgres://prod"}},
+                "auth": "secret-token",
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["secrets", "pull", "--stdout", "--format", "json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {"DATABASE_URL": "postgres://prod"}
 
 
 def test_secrets_list_accepts_wrapped_backend_payload(monkeypatch, tmp_path) -> None:
@@ -687,18 +787,10 @@ def test_secrets_list_accepts_wrapped_backend_payload(monkeypatch, tmp_path) -> 
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["--json", "secrets", "list"])
+    result = runner.invoke(app, ["--json", "secret"])
 
     assert result.exit_code == 0
-    assert json.loads(result.output) == [
-        {
-            "key": "OPENAI_API_KEY",
-            "version": 3,
-            "updated_at": "2026-03-15T10:00:00Z",
-            "updated_by": "dev@example.com",
-            "value": "sk-secret",
-        }
-    ]
+    assert json.loads(result.output) == ["OPENAI_API_KEY"]
 
 
 def test_secrets_stats_emits_json(monkeypatch, tmp_path) -> None:
@@ -854,6 +946,72 @@ def test_secrets_set_posts_single_secret(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0
     assert "Set secret OPENAI_API_KEY" in result.output
+
+
+def test_secrets_set_sends_path_and_normalized_tag_inputs(monkeypatch, tmp_path) -> None:
+    token_store = FakeTokenStore()
+    config_path = tmp_path / ".envbasis.toml"
+    config_path.write_text(
+        'api_base_url = "https://api.example.com/api/v1"\nproject_id = "proj_1"\nproject_name = "my-ai-app"\n',
+        encoding="utf-8",
+    )
+    _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [{"id": "proj_1", "name": "my-ai-app"}],
+                "auth": "secret-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_1/environments",
+                "status_code": 200,
+                "payload": [{"id": "env_1", "name": "dev"}],
+                "auth": "secret-token",
+            },
+            {
+                "method": "POST",
+                "url": "https://api.example.com/api/v1/projects/proj_1/environments/env_1/secrets",
+                "json": {
+                    "key": "DATABASE_URL",
+                    "value": "postgres://db",
+                    "path": "/backend",
+                    "tags": ["database", "shared"],
+                },
+                "status_code": 200,
+                "payload": {
+                    "key": "DATABASE_URL",
+                    "path": "/backend",
+                    "tags": ["database", "shared"],
+                    "version": 1,
+                },
+                "auth": "secret-token",
+            },
+        ],
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "secrets",
+            "set",
+            "DATABASE_URL",
+            "postgres://db",
+            "--path",
+            "/backend",
+            "--tag",
+            "database",
+            "--tag",
+            "shared",
+        ],
+    )
+
+    assert result.exit_code == 0
 
 
 def test_secrets_update_patches_single_secret(monkeypatch, tmp_path) -> None:
