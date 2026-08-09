@@ -17,6 +17,7 @@ from app.api.routes.secret_structure import router as secret_structure_router
 from app.api.routes.secret_imports import router as secret_imports_router
 from app.api.routes.secret_history import router as secret_history_router
 from app.api.routes.webhooks import router as webhooks_router
+from app.core.config import settings
 
 api_router = APIRouter()
 api_router.include_router(access_control_router, tags=["access-control"])
@@ -35,4 +36,5 @@ api_router.include_router(secret_structure_router, tags=["secret-structure"])
 api_router.include_router(secret_imports_router, tags=["secret-imports"])
 api_router.include_router(secret_history_router, tags=["secret-history"])
 api_router.include_router(runtime_tokens_router, tags=["runtime-tokens"])
-api_router.include_router(webhooks_router, tags=["webhooks"])
+if settings.webhooks_enabled:
+    api_router.include_router(webhooks_router, tags=["webhooks"])
