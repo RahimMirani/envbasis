@@ -4,11 +4,12 @@ import csv
 import io
 import json
 from datetime import datetime, timezone
+from typing import Annotated
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import ProjectAccess, get_current_user, require_audit_log_access
@@ -53,7 +54,7 @@ def _parse_cursor(cursor: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid audit cursor.",
         ) from exc
 
@@ -66,7 +67,9 @@ def _parse_cursor(cursor: str | None) -> datetime | None:
 @router.get("/{project_id}/audit-logs", response_model=list[AuditLogRead])
 def list_audit_logs(
     project_id: uuid.UUID,
-    limit: int = Query(default=100, ge=1, le=500),
+    http_response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(require_audit_log_access),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -75,16 +78,22 @@ def list_audit_logs(
     actor = aliased(User)
     environment = aliased(Environment)
 
+    total = db.scalar(
+        select(func.count(AuditLog.id)).where(
+            AuditLog.project_id == project_access.project.id
+        )
+    ) or 0
     rows = db.execute(
         select(AuditLog, actor.email, environment.name)
         .outerjoin(actor, actor.id == AuditLog.user_id)
         .outerjoin(environment, environment.id == AuditLog.environment_id)
         .where(AuditLog.project_id == project_access.project.id)
         .order_by(AuditLog.created_at.desc())
+        .offset(offset)
         .limit(limit)
     ).all()
 
-    response = [
+    records = [
         AuditLogRead(
             id=audit_log.id,
             project_id=audit_log.project_id,
@@ -106,7 +115,11 @@ def list_audit_logs(
         metadata={"limit": limit},
     )
     db.commit()
-    return response
+    if http_response is not None:
+        http_response.headers["X-Total-Count"] = str(total)
+        http_response.headers["X-Limit"] = str(limit)
+        http_response.headers["X-Offset"] = str(offset)
+    return records
 
 
 @router.get("/{project_id}/audit-logs/export")
