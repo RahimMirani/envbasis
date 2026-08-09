@@ -163,7 +163,7 @@ def test_project_use_persists_selection(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["--api-url", "https://api.example.com/api/v1", "project", "use", "my-ai-app"],
+        ["--api-url", "https://api.example.com/api/v1", "project", "--select", "my-ai-app"],
     )
 
     assert result.exit_code == 0
@@ -172,6 +172,31 @@ def test_project_use_persists_selection(monkeypatch, tmp_path) -> None:
     assert 'project_name = "my-ai-app"' in config_text
     assert 'environment = "stale-env"' not in config_text
     assert "Selected project my-ai-app" in result.output
+
+
+def test_project_select_shortcut_persists_selection(monkeypatch, tmp_path) -> None:
+    token_store = FakeTokenStore()
+    config_path = tmp_path / ".envbasis.toml"
+    config_path.write_text('api_base_url = "https://api.example.com/api/v1"\n', encoding="utf-8")
+    _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [{"id": "proj_1", "name": "my-ai-app"}],
+                "auth": "project-token",
+            }
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["project", "--select", "my-ai-app"])
+
+    assert result.exit_code == 0
+    assert "Selected project my-ai-app" in result.output
+    assert 'project_id = "proj_1"' in config_path.read_text(encoding="utf-8")
 
 
 def test_project_show_uses_saved_selection(monkeypatch, tmp_path) -> None:
@@ -261,12 +286,44 @@ def test_project_update_refreshes_saved_name(monkeypatch, tmp_path) -> None:
     assert "Updated project renamed-app" in result.output
 
 
-def test_project_show_requires_selection(monkeypatch, tmp_path) -> None:
+def test_project_show_prompts_for_selection(monkeypatch, tmp_path) -> None:
     token_store = FakeTokenStore()
     _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [
+                    {"id": "proj_1", "name": "my-ai-app"},
+                    {"id": "proj_2", "name": "other-app"},
+                ],
+                "auth": "project-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_1",
+                "status_code": 200,
+                "payload": {
+                    "id": "proj_1",
+                    "name": "my-ai-app",
+                    "description": "Selected interactively",
+                    "role": "owner",
+                },
+                "auth": "project-token",
+            },
+        ],
+    )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["--api-url", "https://api.example.com/api/v1", "project", "show"])
+    result = runner.invoke(
+        app,
+        ["--api-url", "https://api.example.com/api/v1", "project", "show"],
+        input="1\n",
+    )
 
-    assert result.exit_code == 1
-    assert "No project selected." in result.output
+    assert result.exit_code == 0
+    assert "Select a project" in result.output
+    assert "Selected interactively" in result.output
