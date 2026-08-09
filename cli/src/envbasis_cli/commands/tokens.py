@@ -248,6 +248,10 @@ def _resolve_token_environment(
     if len(environments) == 1:
         return environments[0]
 
+    if app_context.options.output_json:
+        app_context.output.error("Multiple environments are available. Select one with --env.")
+        raise typer.Exit(code=1)
+
     app_context.output.info(f"Select an environment for project {project_name}:")
     for index, environment in enumerate(environments, start=1):
         app_context.output.info(f"{index}. {environment.name}")
