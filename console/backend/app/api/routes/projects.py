@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
@@ -16,10 +17,13 @@ from app.api.deps import (
     require_project_owner,
     require_team_management,
 )
+from app.api.pagination import paginate_items
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
+from app.models.access_role import AccessRole, AccessRoleAssignment
 from app.models.environment import Environment
 from app.models.project import Project
+from app.models.organization import Organization
 from app.models.project_member import ProjectMember
 from app.models.runtime_token import RuntimeToken
 from app.models.runtime_token_share import RuntimeTokenShare
@@ -35,7 +39,7 @@ from app.schemas.member import (
     MemberRevokeRequest,
     ProjectMemberRead,
 )
-from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
+from app.schemas.project import ProjectCreate, ProjectKeyRotationRead, ProjectRead, ProjectUpdate
 from app.services.audit import write_audit_log
 from app.services.environments import get_project_environment_or_404
 from app.services.webhooks import dispatch_webhooks, get_webhooks_for_event
@@ -43,6 +47,11 @@ from app.services.invitation_service import (
     create_or_resend_invitation,
     list_project_invitations,
     revoke_project_invitation,
+)
+from app.services.member_permissions import get_undelegable_permissions
+from app.services.project_encryption import (
+    get_or_create_active_project_key,
+    rotate_project_encryption_key,
 )
 
 router = APIRouter(prefix="/projects")
@@ -135,6 +144,7 @@ def _serialize_project(
         name=project.name,
         description=project.description,
         owner_id=project.owner_id,
+        organization_id=project.organization_id,
         role=role,
         audit_log_visibility=project.audit_log_visibility,
         can_manage_secrets=can_manage_secrets,
@@ -401,17 +411,25 @@ def create_project(
     project_name = payload.name.strip()
     if not project_name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Project name cannot be empty.",
         )
     description = payload.description.strip() if payload.description else None
     if description == "":
         description = None
+    if payload.organization_id is not None:
+        organization = db.get(Organization, payload.organization_id)
+        if organization is None or organization.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an organization owner can create a project in that organization.",
+            )
 
     project = Project(
         name=project_name,
         description=description,
         owner_id=current_user.id,
+        organization_id=payload.organization_id,
         audit_log_visibility="owner_only",
     )
     db.add(project)
@@ -428,6 +446,7 @@ def create_project(
             invited_by=current_user.id,
         )
     )
+    get_or_create_active_project_key(db, project_id=project.id)
     write_audit_log(
         db,
         project_id=project.id,
@@ -449,12 +468,61 @@ def create_project(
     )
 
 
+@router.post(
+    "/{project_id}/encryption/rotate",
+    response_model=ProjectKeyRotationRead,
+)
+def rotate_project_key(
+    project_access: ProjectAccess = Depends(require_project_owner),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectKeyRotationRead:
+    result = rotate_project_encryption_key(
+        db,
+        project_id=project_access.project.id,
+    )
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="project.encryption_key.rotated",
+        metadata={
+            "previous_version": result.previous_version,
+            "active_version": result.active_version,
+            "secrets_reencrypted": result.secrets_reencrypted,
+        },
+    )
+    db.commit()
+    return ProjectKeyRotationRead(
+        project_id=result.project_id,
+        previous_version=result.previous_version,
+        active_version=result.active_version,
+        secrets_reencrypted=result.secrets_reencrypted,
+        rotated_at=result.rotated_at,
+    )
+
+
 @router.get("", response_model=list[ProjectRead])
 def list_projects(
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ProjectRead]:
     membership = aliased(ProjectMember)
+    assigned_project_ids = select(AccessRole.project_id).join(
+        AccessRoleAssignment, AccessRoleAssignment.role_id == AccessRole.id
+    ).where(
+        AccessRoleAssignment.user_id == current_user.id,
+        AccessRole.project_id.is_not(None),
+    )
+    assigned_organization_ids = select(AccessRole.organization_id).join(
+        AccessRoleAssignment, AccessRoleAssignment.role_id == AccessRole.id
+    ).where(
+        AccessRoleAssignment.user_id == current_user.id,
+        AccessRole.organization_id.is_not(None),
+    )
     stmt = (
         select(
             Project,
@@ -475,12 +543,19 @@ def list_projects(
             or_(
                 Project.owner_id == current_user.id,
                 membership.user_id == current_user.id,
+                Project.id.in_(assigned_project_ids),
+                Project.organization_id.in_(assigned_organization_ids),
             )
         )
         .order_by(Project.created_at.desc())
     )
 
-    rows = db.execute(stmt).all()
+    rows = paginate_items(
+        db.execute(stmt).all(),
+        limit=limit,
+        offset=offset,
+        response=response,
+    )
     stats_map = _get_project_stats_map(
         db,
         project_ids=[project.id for project, *_ in rows],
@@ -490,7 +565,9 @@ def list_projects(
             project,
             ROLE_OWNER if project.owner_id == current_user.id else role or ROLE_MEMBER,
             can_manage_secrets=(
-                True if project.owner_id == current_user.id else bool(can_push_pull_secrets)
+                True
+                if project.owner_id == current_user.id
+                else bool(can_push_pull_secrets) or role is None
             ),
             can_manage_runtime_tokens=(
                 True if project.owner_id == current_user.id else bool(can_manage_runtime_tokens)
@@ -532,7 +609,7 @@ def get_project(
     return _serialize_project(
         project_access.project,
         project_access.role,
-        can_manage_secrets=project_access.role == ROLE_OWNER or project_access.can_push_pull_secrets,
+        can_manage_secrets=project_access.role == ROLE_OWNER or project_access.uses_rbac or project_access.can_push_pull_secrets,
         can_manage_runtime_tokens=(
             project_access.role == ROLE_OWNER or project_access.can_manage_runtime_tokens
         ),
@@ -555,7 +632,7 @@ def update_project(
         project_name = payload.name.strip()
         if not project_name:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Project name cannot be empty.",
             )
         project_access.project.name = project_name
@@ -569,6 +646,19 @@ def update_project(
     if payload.audit_log_visibility is not None:
         project_access.project.audit_log_visibility = payload.audit_log_visibility
         metadata["audit_log_visibility"] = payload.audit_log_visibility
+
+    if "organization_id" in payload.model_fields_set:
+        if payload.organization_id is not None:
+            organization = db.get(Organization, payload.organization_id)
+            if organization is None or organization.owner_id != current_user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only an organization owner can attach this project.",
+                )
+        project_access.project.organization_id = payload.organization_id
+        metadata["organization_id"] = (
+            str(payload.organization_id) if payload.organization_id else None
+        )
 
     write_audit_log(
         db,
@@ -616,7 +706,7 @@ def create_environment(
     environment_name = payload.name.strip()
     if not environment_name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Environment name cannot be empty.",
         )
 
@@ -650,6 +740,9 @@ def create_environment(
 
 @router.get("/{project_id}/environments", response_model=list[EnvironmentRead])
 def list_environments(
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(get_project_access),
     db: Session = Depends(get_db),
 ) -> list[Environment]:
@@ -658,7 +751,7 @@ def list_environments(
         .where(Environment.project_id == project_access.project.id)
         .order_by(Environment.created_at.asc())
     ).all()
-    return list(environments)
+    return paginate_items(environments, limit=limit, offset=offset, response=response)
 
 
 @router.patch("/{project_id}/environments/{environment_id}", response_model=EnvironmentRead)
@@ -674,7 +767,7 @@ def rename_environment(
     new_name = payload.name.strip()
     if not new_name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Environment name cannot be empty.",
         )
 
@@ -734,6 +827,9 @@ def delete_environment(
 
 @router.get("/{project_id}/members", response_model=list[ProjectMemberRead])
 def list_members(
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(get_project_access),
     db: Session = Depends(get_db),
 ) -> list[ProjectMemberRead]:
@@ -763,7 +859,12 @@ def list_members(
                 joined_at=project_access.project.created_at,
             )
 
-    return list(members.values())
+    return paginate_items(
+        list(members.values()),
+        limit=limit,
+        offset=offset,
+        response=response,
+    )
 
 
 @router.get(
@@ -771,10 +872,18 @@ def list_members(
     response_model=list[ProjectInvitationRead],
 )
 def list_pending_invitations(
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(require_team_management),
     db: Session = Depends(get_db),
 ) -> list[ProjectInvitationRead]:
-    return list_project_invitations(db, project=project_access.project)
+    return paginate_items(
+        list_project_invitations(db, project=project_access.project),
+        limit=limit,
+        offset=offset,
+        response=response,
+    )
 
 
 @router.post(
@@ -807,6 +916,11 @@ def invite_member(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> InviteMemberResponse:
+    _assert_can_delegate_member_permissions(
+        project_access=project_access,
+        current_user=current_user,
+        payload=payload,
+    )
     return create_or_resend_invitation(
         db,
         project=project_access.project,
@@ -818,6 +932,30 @@ def invite_member(
         can_view_audit_logs=payload.can_view_audit_logs,
         invited_by=current_user,
     )
+
+
+def _assert_can_delegate_member_permissions(
+    *,
+    project_access: ProjectAccess,
+    current_user: User,
+    payload: MemberInviteRequest | MemberPermissionUpdateRequest | MemberBulkPermissionUpdateRequest,
+) -> None:
+    if current_user.id == project_access.project.owner_id:
+        return
+
+    forbidden_permissions = get_undelegable_permissions(
+        actor_permissions=project_access,
+        requested_permissions=payload,
+    )
+    if forbidden_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "You cannot grant project permissions that you do not have: "
+                + ", ".join(forbidden_permissions)
+                + "."
+            ),
+        )
 
 
 def _apply_member_permission_updates(
@@ -847,6 +985,11 @@ def update_member_permissions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectMemberRead:
+    _assert_can_delegate_member_permissions(
+        project_access=project_access,
+        current_user=current_user,
+        payload=payload,
+    )
     member_email = payload.email.strip().lower()
     member_user = db.scalar(select(User).where(User.email == member_email))
     if member_user is None:
@@ -886,6 +1029,11 @@ def bulk_update_member_permissions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ProjectMemberRead]:
+    _assert_can_delegate_member_permissions(
+        project_access=project_access,
+        current_user=current_user,
+        payload=payload,
+    )
     normalized_emails = [email.strip().lower() for email in payload.emails]
     users = db.scalars(select(User).where(User.email.in_(normalized_emails))).all()
     users_by_email = {user.email.lower(): user for user in users}
@@ -951,8 +1099,8 @@ def revoke_member(
         shared_token_action=payload.shared_token_action,
     )
     webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="member.revoked")
+    dispatch_webhooks(webhook_targets, db=db, event="member.revoked", project_id=project_access.project.id, environment_id=None, actor_user_id=current_user.id, metadata=revoke_meta)
     db.commit()
-    dispatch_webhooks(webhook_targets, event="member.revoked", project_id=project_access.project.id, environment_id=None, actor_user_id=current_user.id, metadata=revoke_meta)
     return MessageResponse(detail=detail)
 
 
@@ -1010,16 +1158,16 @@ def bulk_revoke_members(
         project_id=project_access.project.id,
         action="member.revoked",
     )
-    db.commit()
-
     for revoke_meta in revoke_metas:
         dispatch_webhooks(
             webhook_targets,
+            db=db,
             event="member.revoked",
             project_id=project_access.project.id,
             environment_id=None,
             actor_user_id=current_user.id,
             metadata=revoke_meta,
         )
+    db.commit()
 
     return MessageResponse(detail=f"Revoked {len(revoke_metas)} member(s).")
