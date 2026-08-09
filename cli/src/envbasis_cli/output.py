@@ -37,6 +37,9 @@ class OutputManager:
         )
 
     def error(self, message: str) -> None:
+        if self.output_json:
+            self.error_console.print_json(json.dumps({"error": message}))
+            return
         self.error_console.print(f"[red]{message}[/red]")
 
     def table(self, title: str, columns: list[str], rows: list[list[str]]) -> None:
