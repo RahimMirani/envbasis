@@ -21,6 +21,17 @@ class Endpoint(StrEnum):
     SECRET_REVEAL = "/projects/{project_id}/environments/{environment_id}/secrets/{key}/reveal"
     SECRETS_STATS = "/projects/{project_id}/secrets/stats"
     SECRET_DETAIL = "/projects/{project_id}/environments/{environment_id}/secrets/{key}"
+    SECRET_FOLDERS = "/projects/{project_id}/environments/{environment_id}/folders"
+    SECRET_TAGS = "/projects/{project_id}/secret-tags"
+    SECRET_TAG_DETAIL = "/projects/{project_id}/secret-tags/{tag_id}"
+    SECRET_IMPORTS = "/projects/{project_id}/secret-imports"
+    SECRET_IMPORT_DETAIL = "/projects/{project_id}/secret-imports/{import_id}"
+    SECRET_VERSIONS = "/projects/{project_id}/environments/{environment_id}/secrets/{key}/versions"
+    SECRET_VERSION_REVEAL = "/projects/{project_id}/environments/{environment_id}/secrets/{key}/versions/{version}/reveal"
+    SECRET_VERSION_ROLLBACK = "/projects/{project_id}/environments/{environment_id}/secrets/{key}/versions/{version}/rollback"
+    ENVIRONMENT_RECOVERY = "/projects/{project_id}/environments/{environment_id}/secrets/recovery"
+    PROJECT_RECOVERY = "/projects/{project_id}/secrets/recovery"
+    SECRET_RETENTION = "/projects/{project_id}/secret-retention"
     MEMBERS = "/projects/{project_id}/members"
     INVITE = "/projects/{project_id}/invite"
     MEMBER_ACCESS = "/projects/{project_id}/members/access"
@@ -87,6 +98,14 @@ class CreateEnvironmentRequest(BaseModel):
 
 class SecretMetadata(BaseModel):
     key: str
+    path: str = "/"
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    owner: str | None = None
+    service: str | None = None
+    rotation_interval_days: int | None = None
+    rotate_at: str | None = None
+    custom_metadata: dict[str, str] = Field(default_factory=dict)
     version: int | None = None
     updated_at: str | None = None
     updated_by: str | None = None
@@ -107,6 +126,14 @@ class SecretMetadata(BaseModel):
 class RevealedSecret(BaseModel):
     key: str
     value: str
+    path: str = "/"
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    owner: str | None = None
+    service: str | None = None
+    rotation_interval_days: int | None = None
+    rotate_at: str | None = None
+    custom_metadata: dict[str, str] = Field(default_factory=dict)
     version: int | None = None
     updated_at: str | None = None
     updated_by_email: str | None = None
@@ -186,6 +213,14 @@ class SecretsStats(BaseModel):
 
 class PushSecretsRequest(BaseModel):
     secrets: dict[str, str]
+    path: str = "/"
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    owner: str | None = None
+    service: str | None = None
+    rotation_interval_days: int | None = None
+    rotate_at: str | None = None
+    custom_metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class PushSecretsResponse(BaseModel):
@@ -199,15 +234,145 @@ class PullSecretsResponse(BaseModel):
     environment_id: str | None = None
     environment_name: str | None = None
     secrets: dict[str, str] = Field(default_factory=dict)
+    items: list["ResolvedSecretItem"] = Field(default_factory=list)
+    resolution_mode: str = "resolved"
+    includes_imports: bool = True
+    resolution_errors: list[str] = Field(default_factory=list)
+
+
+class ResolvedSecretItem(BaseModel):
+    key: str
+    value: str
+    version: int
+    source: str
+    source_environment_id: str
+    source_path: str
+    value_kind: str
+    referenced_keys: list[str] = Field(default_factory=list)
+    resolved: bool
+    error: str | None = None
 
 
 class CreateSecretRequest(BaseModel):
     key: str
     value: str
+    path: str = "/"
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    owner: str | None = None
+    service: str | None = None
+    rotation_interval_days: int | None = None
+    rotate_at: str | None = None
+    custom_metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class UpdateSecretRequest(BaseModel):
     value: str
+    path: str | None = None
+    tags: list[str] | None = None
+    description: str | None = None
+    owner: str | None = None
+    service: str | None = None
+    rotation_interval_days: int | None = None
+    rotate_at: str | None = None
+    custom_metadata: dict[str, str] | None = None
+
+
+class SecretFolder(BaseModel):
+    id: str | None = None
+    environment_id: str
+    path: str
+    parent_path: str
+    name: str
+    description: str | None = None
+    created_by: str | None = None
+    created_at: str | None = None
+
+
+class SecretFolderListResponse(BaseModel):
+    project_id: str
+    environment_id: str
+    path: str
+    recursive: bool = False
+    folders: list[SecretFolder] = Field(default_factory=list)
+
+
+class ProjectSecretTag(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    color: str | None = None
+    description: str | None = None
+    created_by: str | None = None
+    created_at: str | None = None
+
+
+class SecretImportRule(BaseModel):
+    id: str
+    project_id: str
+    target_environment_id: str
+    target_path: str
+    source_environment_id: str
+    source_path: str
+    recursive: bool = False
+    priority: int = 0
+    enabled: bool = True
+    created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class SecretVersionItem(BaseModel):
+    key: str
+    path: str
+    version: int
+    is_deleted: bool = False
+    is_reference: bool = False
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    owner: str | None = None
+    service: str | None = None
+    updated_by_email: str | None = None
+    updated_at: str
+    archived_at: str | None = None
+
+
+class SecretVersionList(BaseModel):
+    project_id: str
+    environment_id: str
+    key: str
+    path: str
+    versions: list[SecretVersionItem] = Field(default_factory=list)
+
+
+class HistoricalSecret(SecretVersionItem):
+    value: str
+    revealed_at: str | None = None
+
+
+class SecretRollbackResult(BaseModel):
+    key: str
+    path: str
+    source_version: int
+    version: int
+    updated_at: str | None = None
+
+
+class RecoveryResult(BaseModel):
+    project_id: str
+    environment_id: str | None = None
+    at: str
+    dry_run: bool
+    changed: int
+    environments_changed: int = 0
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SecretRetention(BaseModel):
+    project_id: str
+    retain_versions: int
+    retain_days: int | None = None
+    archive_deleted_after_days: int | None = None
 
 
 class MemberSummary(BaseModel):
