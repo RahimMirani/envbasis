@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-import click
 import httpx
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from envbasis_cli.command_support import build_client, resolve_environment
@@ -138,15 +138,44 @@ def test_env_create_emits_json(monkeypatch, tmp_path) -> None:
     assert json.loads(result.output) == {"id": "env_1", "name": "dev", "created_at": None, "updated_at": None}
 
 
-def test_env_list_requires_selected_project(monkeypatch, tmp_path) -> None:
+def test_env_list_prompts_for_missing_project_and_saves_it(monkeypatch, tmp_path) -> None:
     token_store = FakeTokenStore()
+    config_path = tmp_path / ".envbasis.toml"
     _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [
+                    {"id": "proj_1", "name": "first-app"},
+                    {"id": "proj_2", "name": "my-ai-app"},
+                ],
+                "auth": "env-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_2/environments",
+                "status_code": 200,
+                "payload": [{"id": "env_1", "name": "prod"}],
+                "auth": "env-token",
+            },
+        ],
+    )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["--api-url", "https://api.example.com/api/v1", "env", "list"])
+    result = runner.invoke(
+        app,
+        ["--api-url", "https://api.example.com/api/v1", "env", "list"],
+        input="2\n",
+    )
 
-    assert result.exit_code == 1
-    assert "No project selected." in result.output
+    assert result.exit_code == 0
+    assert "Select a project" in result.output
+    assert "prod" in result.output
+    assert 'project_id = "proj_2"' in config_path.read_text(encoding="utf-8")
 
 
 def test_env_use_persists_selection(monkeypatch, tmp_path) -> None:
@@ -181,12 +210,50 @@ def test_env_use_persists_selection(monkeypatch, tmp_path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["env", "use", "prod"])
+    result = runner.invoke(app, ["environment", "prod"])
 
     assert result.exit_code == 0
     config_text = config_path.read_text(encoding="utf-8")
     assert 'environment = "prod"' in config_text
     assert "Selected environment prod" in result.output
+
+
+def test_environment_shortcut_persists_selection(monkeypatch, tmp_path) -> None:
+    token_store = FakeTokenStore()
+    config_path = tmp_path / ".envbasis.toml"
+    config_path.write_text(
+        'api_base_url = "https://api.example.com/api/v1"\nproject_id = "proj_1"\nproject_name = "my-ai-app"\n',
+        encoding="utf-8",
+    )
+    _wire_main_dependencies(monkeypatch, tmp_path, token_store)
+    _mock_http(
+        monkeypatch,
+        [
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects",
+                "status_code": 200,
+                "payload": [{"id": "proj_1", "name": "my-ai-app"}],
+                "auth": "env-token",
+            },
+            {
+                "method": "GET",
+                "url": "https://api.example.com/api/v1/projects/proj_1/environments",
+                "status_code": 200,
+                "payload": [
+                    {"id": "env_1", "name": "dev"},
+                    {"id": "env_2", "name": "prod"},
+                ],
+                "auth": "env-token",
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["environment", "prod"])
+
+    assert result.exit_code == 0
+    assert "Selected environment prod" in result.output
+    assert 'environment = "prod"' in config_path.read_text(encoding="utf-8")
 
 
 def test_resolve_environment_auto_selects_single_environment(monkeypatch, tmp_path) -> None:
@@ -232,7 +299,7 @@ def test_resolve_environment_auto_selects_single_environment(monkeypatch, tmp_pa
     assert environment.name == "dev"
 
 
-def test_resolve_environment_fails_when_multiple_exist_without_selection(monkeypatch, tmp_path) -> None:
+def test_resolve_environment_prompts_when_multiple_exist_without_selection(monkeypatch, tmp_path) -> None:
     token_store = FakeTokenStore()
     config_path = tmp_path / ".envbasis.toml"
     config_path.write_text(
@@ -272,10 +339,11 @@ def test_resolve_environment_fails_when_multiple_exist_without_selection(monkeyp
     client = build_client(app_context)
     project = ProjectSummary(id="proj_1", name="my-ai-app")
 
-    with pytest.raises(click.exceptions.Exit) as exc_info:
-        resolve_environment(app_context, client, project)
+    monkeypatch.setattr(typer, "prompt", lambda *args, **kwargs: 2)
+    selected = resolve_environment(app_context, client, project)
 
-    assert exc_info.value.exit_code == 1
+    assert selected.name == "prod"
+    assert 'environment = "prod"' in config_path.read_text(encoding="utf-8")
 
 
 def test_resolve_environment_prefers_explicit_flag_over_saved_env(monkeypatch, tmp_path) -> None:
