@@ -14,6 +14,7 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
 from app.services.audit import write_audit_log
+from app.services.access_control import evaluate_permission, subject_has_assignments
 
 ROLE_OWNER = "owner"
 ROLE_MEMBER = "member"
@@ -29,6 +30,8 @@ class ProjectAccess:
     can_manage_runtime_tokens: bool
     can_manage_team: bool
     can_view_audit_logs: bool
+    subject_user_id: uuid.UUID | None = None
+    uses_rbac: bool = False
 
 
 def _resolve_identity(
@@ -99,6 +102,7 @@ def get_project_access(
             can_manage_runtime_tokens=True,
             can_manage_team=True,
             can_view_audit_logs=True,
+            subject_user_id=current_user.id,
         )
 
     membership = db.scalar(
@@ -107,7 +111,8 @@ def get_project_access(
             ProjectMember.user_id == current_user.id,
         )
     )
-    if membership is None:
+    uses_rbac = subject_has_assignments(db, project=project, user_id=current_user.id)
+    if membership is None and not uses_rbac:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this project.",
@@ -116,17 +121,19 @@ def get_project_access(
     if project.audit_log_visibility == "members":
         can_view_audit_logs = True
     elif project.audit_log_visibility == "specific":
-        can_view_audit_logs = membership.can_view_audit_logs
+        can_view_audit_logs = bool(membership and membership.can_view_audit_logs)
     else:
         can_view_audit_logs = False
 
     return ProjectAccess(
         project=project,
-        role=membership.role,
-        can_push_pull_secrets=membership.can_push_pull_secrets,
-        can_manage_runtime_tokens=membership.can_manage_runtime_tokens,
-        can_manage_team=membership.can_manage_team,
+        role=membership.role if membership is not None else ROLE_MEMBER,
+        can_push_pull_secrets=bool(membership and membership.can_push_pull_secrets),
+        can_manage_runtime_tokens=bool(membership and membership.can_manage_runtime_tokens),
+        can_manage_team=bool(membership and membership.can_manage_team),
         can_view_audit_logs=can_view_audit_logs,
+        subject_user_id=current_user.id,
+        uses_rbac=uses_rbac,
     )
 
 
@@ -141,12 +148,48 @@ def require_project_owner(project_access: ProjectAccess = Depends(get_project_ac
 
 
 def require_secret_management(project_access: ProjectAccess = Depends(get_project_access)) -> ProjectAccess:
-    if project_access.role == ROLE_OWNER or project_access.can_push_pull_secrets:
+    if project_access.role == ROLE_OWNER or project_access.uses_rbac or project_access.can_push_pull_secrets:
         return project_access
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="You do not have permission to manage this project's secrets.",
+    )
+
+
+def enforce_project_permission(
+    db: Session,
+    *,
+    project_access: ProjectAccess,
+    resource: str,
+    action: str,
+    environment_id: uuid.UUID | None = None,
+    path: str | None = None,
+    legacy_allowed: bool = False,
+) -> None:
+    if project_access.role == ROLE_OWNER:
+        return
+    if project_access.uses_rbac and project_access.subject_user_id is not None:
+        decision = evaluate_permission(
+            db,
+            project=project_access.project,
+            user_id=project_access.subject_user_id,
+            resource=resource,
+            action=action,
+            environment_id=environment_id,
+            path=path,
+        )
+        if decision.allowed:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied: {resource}:{action} ({decision.reason}).",
+        )
+    if legacy_allowed:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Permission denied: {resource}:{action}.",
     )
 
 
