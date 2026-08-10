@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import logging
 import secrets
+from typing import Annotated
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import ProjectAccess, get_current_user, require_project_owner
+from app.api.pagination import paginate_items
 from app.db.session import get_db
 from app.models.user import User
 from app.models.webhook import Webhook
+from app.models.webhook_delivery import WebhookDelivery
 from app.schemas.common import MessageResponse
 from app.schemas.webhook import (
     SUPPORTED_EVENTS,
@@ -22,11 +25,15 @@ from app.schemas.webhook import (
 )
 from app.services.audit import write_audit_log
 from app.services.webhooks import (
+    WebhookDestinationError,
+    count_webhook_deliveries,
     get_latest_deliveries_for_webhooks,
     is_missing_webhook_deliveries_table,
     is_missing_webhooks_table,
     list_webhook_deliveries,
+    redeliver_webhook_delivery,
     send_test_webhook,
+    validate_webhook_destination,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +82,26 @@ def _get_project_webhook_or_404(
     return webhook
 
 
+def _get_webhook_delivery_or_404(
+    db: Session,
+    *,
+    webhook_id: uuid.UUID,
+    delivery_id: uuid.UUID,
+) -> WebhookDelivery:
+    delivery = db.scalar(
+        select(WebhookDelivery).where(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.webhook_id == webhook_id,
+        )
+    )
+    if delivery is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook delivery not found.",
+        )
+    return delivery
+
+
 @router.post(
     "/{project_id}/webhooks",
     response_model=WebhookRead,
@@ -89,9 +116,16 @@ def create_webhook(
     try:
         payload.validate_events()
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     url = str(payload.url)
+    try:
+        validate_webhook_destination(url)
+    except WebhookDestinationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     signing_secret = secrets.token_hex(32)
 
     webhook = Webhook(
@@ -127,6 +161,9 @@ def create_webhook(
 
 @router.get("/{project_id}/webhooks", response_model=list[WebhookRead])
 def list_webhooks(
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(require_project_owner),
     db: Session = Depends(get_db),
 ) -> list[WebhookRead]:
@@ -145,6 +182,12 @@ def list_webhooks(
         logger.exception("Database error while listing webhooks for project %s", project_access.project.id)
         raise
 
+    webhooks = paginate_items(
+        webhooks,
+        limit=limit,
+        offset=offset,
+        response=response,
+    )
     latest_by_webhook = {}
     if webhooks:
         try:
@@ -177,7 +220,9 @@ def list_supported_events(
 )
 def list_webhook_delivery_history(
     webhook_id: uuid.UUID,
-    limit: int = Query(default=10, ge=1, le=50),
+    response: Response = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
     project_access: ProjectAccess = Depends(require_project_owner),
     db: Session = Depends(get_db),
 ) -> list[WebhookDeliveryRead]:
@@ -188,7 +233,13 @@ def list_webhook_delivery_history(
     )
 
     try:
-        deliveries = list_webhook_deliveries(db, webhook_id=webhook_id, limit=limit)
+        all_delivery_count = count_webhook_deliveries(db, webhook_id=webhook_id)
+        deliveries = list_webhook_deliveries(
+            db,
+            webhook_id=webhook_id,
+            limit=limit,
+            offset=offset,
+        )
     except SQLAlchemyError as exc:
         db.rollback()
         if is_missing_webhook_deliveries_table(exc):
@@ -199,6 +250,10 @@ def list_webhook_delivery_history(
         logger.exception("Database error while listing deliveries for webhook %s", webhook_id)
         raise
 
+    if response is not None:
+        response.headers["X-Total-Count"] = str(all_delivery_count)
+        response.headers["X-Limit"] = str(limit)
+        response.headers["X-Offset"] = str(offset)
     return [_serialize_delivery(delivery) for delivery in deliveries]
 
 
@@ -244,6 +299,56 @@ def test_webhook(
             "url": webhook.url,
             "status": delivery.status,
             "response_status": delivery.response_status,
+        },
+    )
+    db.commit()
+    db.refresh(delivery)
+    return _serialize_delivery(delivery)
+
+
+@router.post(
+    "/{project_id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+    response_model=WebhookDeliveryRead,
+)
+def redeliver_webhook(
+    webhook_id: uuid.UUID,
+    delivery_id: uuid.UUID,
+    project_access: ProjectAccess = Depends(require_project_owner),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WebhookDeliveryRead:
+    webhook = _get_project_webhook_or_404(
+        db,
+        project_id=project_access.project.id,
+        webhook_id=webhook_id,
+    )
+    if not webhook.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Inactive webhooks cannot be redelivered.",
+        )
+    delivery = _get_webhook_delivery_or_404(
+        db,
+        webhook_id=webhook.id,
+        delivery_id=delivery_id,
+    )
+    try:
+        redeliver_webhook_delivery(db, delivery=delivery)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    write_audit_log(
+        db,
+        project_id=project_access.project.id,
+        user_id=current_user.id,
+        action="webhook.redelivery_requested",
+        metadata={
+            "webhook_id": str(webhook.id),
+            "delivery_id": str(delivery.id),
+            "attempt_count": delivery.attempt_count,
         },
     )
     db.commit()
