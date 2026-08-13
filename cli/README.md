@@ -8,8 +8,15 @@ It is built with Python, Typer, `httpx`, `pydantic`, `rich`, `keyring`, and `pyt
 
 - Keyring-backed CLI session handling
 - Secure session storage in the OS keyring
+- Interactive `envbasis init` setup with server, project, and environment validation
+- In-memory process injection with `envbasis run -- <command>`
+- Development watch mode with safe child-process restarts
+- Dedicated dotenv, JSON, YAML, and shell exports
+- Filesystem and Git secret scanning with redacted findings
 - Project and environment selection stored in local working-directory config
-- Top-level `.env` push and pull workflows
+- Automatic numbered project/environment selection when context is missing
+- Simple `envbasis secret` name listing and `envbasis secrets pull` retrieval
+- `.env` push and `secrets pull` workflows
 - Single-secret CRUD commands for targeted updates
 - Member listing, invitation, access management, and revoke flows
 - Runtime token creation, reveal, revoke, share, and audit visibility
@@ -20,18 +27,24 @@ It is built with Python, Typer, `httpx`, `pydantic`, `rich`, `keyring`, and `pyt
 The current CLI supports these areas:
 
 - Authentication: `login`, `logout`, `whoami`
+- Initialization: `init`
+- Process injection: `run`
+- Automation: `export`
+- Secret scanning: `scan`
 - Context inspection: `context`
-- Project workflows: `projects list`, `project create`, `project show`, `project use`, `project update`
-- Environment workflows: `env list`, `env create`, `env use`
-- Secret sync: top-level `push` and `pull`
-- Secret CRUD: `secrets list`, `secrets stats`, `secrets set`, `secrets update`, `secrets delete`
+- Project workflows: `project --select`, `projects list`, `project create`, `project show`, `project update`
+- Environment workflows: `environment`, `env list`, `env create`
+- Secret sync: `secret`, `push`, and `secrets pull`
+- Secret management: `secrets stats`, `secrets set`, `secrets update`, `secrets delete`
 - Member workflows: `members list`, `members access`, plus top-level `invite` and `revoke`
 - Runtime tokens: `token list`, `token create`, `token reveal`, `token revoke`, `token share`, `token shares`
 - Audit logs: `audit logs`
 
-Two command layout details are easy to miss:
+The normal everyday workflow is intentionally short:
 
-- `push` and `pull` are top-level commands. Individual secret CRUD lives under `secrets`.
+- `envbasis secret` lists secret names for the selected context.
+- `envbasis secrets pull` retrieves values and writes `.env` by default.
+- If no project or environment is selected, interactive commands show numbered choices and save the answer.
 - `invite` and `revoke` are top-level commands. Member listing and access toggles live under `members`.
 
 ## Install And Requirements
@@ -42,24 +55,42 @@ Two command layout details are easy to miss:
 - Access to an EnvBasis API deployment
 - A working OS keyring backend
 
-### Install For Local Use
+### Install From PyPI
+
+After the repository owner enables the included PyPI trusted-publishing workflow and creates the first release:
+
+```bash
+pipx install envbasis-cli
+```
+
+Upgrade later with `pipx upgrade envbasis-cli`.
+
+### Install From This Repository
 
 If you want an isolated user install from a checkout of this repo, run this from the repo root:
 
 ```bash
-pipx install .
+pipx install ./cli
 ```
 
 If you prefer a standard Python install:
 
 ```bash
-python -m pip install .
+python -m pip install ./cli
 ```
 
 After installation, the CLI is available as:
 
 ```bash
 envbasis --help
+envbasis --version
+```
+
+Shell completion is available for Bash, Zsh, and Fish through Typer's built-in installers:
+
+```bash
+envbasis --install-completion
+envbasis --show-completion
 ```
 
 ## Authentication And Required Configuration
@@ -68,37 +99,61 @@ The CLI only needs your EnvBasis backend API URL and stores authenticated sessio
 
 ### Required Settings
 
-Current requirements:
-
-- An EnvBasis API base URL
+Hosted users automatically use `https://api.envbasis.com/api/v1`. Self-hosted users can override the API URL during login or initialization.
 
 The recommended setup is a local `.envbasis.toml`, so you can use the CLI directly without re-exporting values in every shell.
 
 ### Recommended Setup: Local Config File
 
-The CLI reads and writes `.envbasis.toml` in the current working directory.
+The CLI searches the current directory and then its parents for the nearest `.envbasis.toml`. This lets every package in a monorepo inherit one repository-level configuration. If no file exists, `envbasis init` creates one in the current directory.
 
-The `project_id`, `project_name`, and `environment` fields are optional. In normal use, they are usually written by `envbasis project use ...` and `envbasis env use ...`.
+The `project_id`, `project_name`, and `environment` fields are optional. They are written automatically after an interactive choice, or manually with `envbasis project --select <name>` and `envbasis environment <name>`.
 
 Example:
 
 ```toml
+config_version = 1
 api_base_url = "https://api.example.com/api/v1"
 project_id = "proj_123"
 project_name = "my-app"
 environment = "dev"
 ```
 
-Once this file exists, the normal usage flow is:
+The recommended setup flow is:
 
 ```bash
 envbasis login
+envbasis init
 envbasis whoami
-envbasis projects list
-envbasis project use my-app
-envbasis env list
-envbasis env use dev
+envbasis secret
+envbasis secrets pull
 envbasis push --file .env
+envbasis run -- npm run dev
+```
+
+`envbasis init` validates the authenticated API connection, lists the projects and environments available to the current user, and saves the selected values only after every check succeeds.
+
+For a self-hosted deployment:
+
+```bash
+envbasis --api-url https://secrets.company.com/api/v1 login
+envbasis init
+```
+
+Validate the discovered configuration and its remote selections at any time:
+
+```bash
+envbasis config check
+```
+
+For scripts, prompts can be replaced with explicit selections:
+
+```bash
+envbasis init \
+  --api-url https://secrets.company.com/api/v1 \
+  --project my-app \
+  --env dev \
+  --no-input
 ```
 
 ### Optional Alternative: Environment Variables
@@ -112,13 +167,25 @@ If you do not want to keep a local `.envbasis.toml`, the CLI can also read these
 - Login stores the authenticated session in the OS keyring, not in `.envbasis.toml`.
 - Expired sessions are cleared locally and you will need to log in again.
 
+### Deployed Services And Universal Auth
+
+For a deployed service, CI job, or agent, create a Machine Identity in the console and store its one-time client ID and client secret in the deployment platform. Exchange them at startup and expose only the short-lived token to CLI commands:
+
+```bash
+export ENVBASIS_TOKEN="$(envbasis login \
+  --method universal-auth \
+  --client-id "$ENVBASIS_CLIENT_ID" \
+  --client-secret "$ENVBASIS_CLIENT_SECRET" \
+  --plain)"
+
+envbasis --project demo-api --env production secret
+```
+
+The client secret is never saved in `.envbasis.toml` or the OS keyring. `ENVBASIS_TOKEN` overrides an interactive keyring session for the lifetime of the process and expires according to the Machine Identity policy.
+
 ## How To Use It
 
-### 1. Create `.envbasis.toml`
-
-Create `.envbasis.toml` in the directory where you want to use the CLI, using the example shown above.
-
-### 2. Sign in
+### 1. Sign in
 
 ```bash
 envbasis login
@@ -130,12 +197,18 @@ Verify the session:
 envbasis whoami
 ```
 
-### 3. Create or select a project
+### 2. Initialize the working directory
+
+```bash
+envbasis init
+```
+
+### 3. Create or change the selected project
 
 ```bash
 envbasis project create --name my-app --description "Internal service"
 envbasis projects list
-envbasis project use my-app
+envbasis project --select my-app
 envbasis project show
 ```
 
@@ -144,7 +217,7 @@ envbasis project show
 ```bash
 envbasis env create dev
 envbasis env create prod
-envbasis env use dev
+envbasis environment dev
 envbasis env list
 ```
 
@@ -164,14 +237,14 @@ envbasis push --file .env --review --yes
 ### 6. Pull secrets back into a file
 
 ```bash
-envbasis pull --file .env
+envbasis secrets pull --file .env
 ```
 
 To inspect what the CLI would pull without writing a file:
 
 ```bash
-envbasis pull --stdout
-envbasis pull --stdout --format json
+envbasis secrets pull --stdout
+envbasis secrets pull --stdout --format json
 ```
 
 ### 7. Inspect the resolved CLI context
@@ -199,8 +272,11 @@ These options are available before any command:
 | `login` | Start the backend website-based device login flow |
 | `logout` | Clear the stored session from keyring |
 | `whoami` | Show the authenticated user |
+| `init` | Validate the API and interactively configure a project and environment |
+| `run` | Run a child process with remote secrets injected only into its environment |
+| `export` | Export remote secrets to stdout or a file in automation-friendly formats |
+| `scan` | Detect likely credentials in files, directories, and Git changes/history |
 | `push` | Upload a dotenv file into the selected project and environment |
-| `pull` | Download secrets into a file or stdout |
 | `invite` | Invite a member to the selected project |
 | `revoke` | Revoke a member from the selected project |
 | `context` | Show the resolved API URL, project, environment, and output mode |
@@ -216,6 +292,7 @@ These options are available before any command:
 | `members` | `list`, `access` |
 | `token` | `list`, `create`, `reveal`, `revoke`, `share`, `shares` |
 | `audit` | `logs` |
+| `config` | `check`, `migrate` |
 
 ## Detailed Usage
 
@@ -263,7 +340,7 @@ envbasis project create --name my-app --description "Internal service"
 Select the active project by name or ID:
 
 ```bash
-envbasis project use my-app
+envbasis project --select my-app
 ```
 
 Show the selected project:
@@ -279,7 +356,7 @@ envbasis project update --name my-renamed-app
 envbasis project update --description "New description"
 ```
 
-`project use` writes `project_id` and `project_name` into `.envbasis.toml` and clears any previously saved environment selection.
+`project --select` writes `project_id` and `project_name` into `.envbasis.toml` and clears any previously saved environment selection.
 
 ### Environments
 
@@ -298,15 +375,36 @@ envbasis env create dev
 Select the active environment by name or ID:
 
 ```bash
-envbasis env use dev
+envbasis environment dev
 ```
 
 Environment resolution behavior:
 
 - If exactly one environment exists and none is selected, the CLI uses it automatically.
-- If multiple environments exist and none is selected, commands that need an environment fail until you pass `--env` or run `envbasis env use <name>`.
+- If multiple environments exist and none is selected, interactive commands show numbered choices and save the selection.
+- JSON automation never prompts; pass `--project` and `--env` explicitly.
 
-### Secret Sync: `push` And `pull`
+### Simple Secret Commands
+
+List only secret names:
+
+```bash
+envbasis secret
+```
+
+Pull secrets into `.env`:
+
+```bash
+envbasis secrets pull
+```
+
+Print pulled values as JSON when you explicitly need stdout:
+
+```bash
+envbasis secrets pull --stdout --format json
+```
+
+### Secret Sync: `push` And `secrets pull`
 
 Push a dotenv file into the selected environment:
 
@@ -329,19 +427,19 @@ envbasis push --file .env --review --yes
 Pull secrets into a dotenv file:
 
 ```bash
-envbasis pull --file .env
+envbasis secrets pull --file .env
 ```
 
 Pull secrets as JSON to stdout:
 
 ```bash
-envbasis pull --stdout --format json
+envbasis secrets pull --stdout --format json
 ```
 
 Write JSON to a file instead of dotenv format:
 
 ```bash
-envbasis pull --file secrets.json --format json --overwrite
+envbasis secrets pull --file secrets.json --format json --overwrite
 ```
 
 Important behavior:
@@ -351,22 +449,16 @@ Important behavior:
 - `push --review --yes` prints the same diff and skips the confirmation prompt.
 - `push --yes` is invalid unless you also pass `--review`.
 - `push` fails if the file does not exist or contains no parsed keys.
-- `pull` prompts before overwriting an existing file unless you pass `--overwrite`.
-- `pull --stdout` skips file writes entirely.
+- `secrets pull` prompts before overwriting an existing file unless you pass `--overwrite`.
+- `secrets pull --stdout` skips file writes entirely.
 - Before reading or writing a secret file, the CLI warns if that path is tracked by git or is not ignored.
 
 ### Secret CRUD
 
-List secrets for the selected environment:
+List secret names for the selected environment:
 
 ```bash
-envbasis secrets list
-```
-
-Reveal raw values if the backend returns them:
-
-```bash
-envbasis secrets list --reveal
+envbasis secret
 ```
 
 Show project-level secret statistics:
@@ -395,8 +487,7 @@ envbasis secrets delete OPENAI_API_KEY
 
 Important behavior:
 
-- `secrets list` hides secret values by default.
-- `secrets list --reveal` only shows values if the backend response includes them.
+- `secret` lists names only; use `secrets pull` when values are required.
 - Single-secret commands operate on the currently resolved project and environment and do not rewrite the whole `.env` file.
 
 ### Members, Invitations, And Revoke Flows
@@ -513,6 +604,94 @@ This includes:
 - JSON mode status
 - verbose mode status
 
+### Configuration Diagnostics And Migration
+
+Validate the discovered file, format version, API connection, authenticated session, project, and environment:
+
+```bash
+envbasis config check
+```
+
+Legacy files without `config_version` continue to load as version 0. Upgrade them safely with:
+
+```bash
+envbasis config migrate
+```
+
+Migration validates the legacy file, creates a `.bak` copy, and atomically replaces the active file. New configuration files use `config_version = 1`.
+
+### Process Secret Injection
+
+Run any command with the selected environment's secrets injected into only that child process:
+
+```bash
+envbasis run -- npm run dev
+envbasis run -- python worker.py --queue emails
+```
+
+Remote values override variables inherited from the current shell by default. Preserve existing local values instead with `--precedence local`:
+
+```bash
+envbasis run --precedence local -- npm test
+```
+
+The CLI passes an argument array directly to the operating system without an intermediate shell. It does not write injected secrets to a file or print their values.
+
+Project and environment can use the global `--project` and `--env` options. Secret path and tag selectors are available directly on `run`. Paths are normalized to values such as `/` and `/backend`; repeated tags use AND matching, so every requested tag must be present:
+
+```bash
+envbasis --project demo-api --env dev run --path /backend --tag api -- npm run dev
+```
+
+Assign selectors when pushing or setting secrets:
+
+```bash
+envbasis push --file .env --path /backend --tag api --tag shared
+envbasis secrets set DATABASE_URL postgres://db --path /backend --tag database
+```
+
+Watch mode polls for relevant remote changes, debounces bursts, prints only changed key names, and safely restarts the child:
+
+```bash
+envbasis run --watch --watch-interval 5 -- npm run dev
+```
+
+Watch mode is intended for local development. Production supervisors should perform controlled deployments instead of automatically restarting on secret changes.
+
+### Export And Automation
+
+Export raw data to stdout without status messages:
+
+```bash
+envbasis export --format dotenv
+envbasis export --format json
+envbasis export --format yaml
+envbasis export --format shell
+```
+
+Write to a file with an explicit non-interactive overwrite policy:
+
+```bash
+envbasis export --format json --output secrets.json --overwrite --no-input
+```
+
+Automation uses stable exit codes: `0` for success, `1` for operational errors, `2` for invalid command usage, `3` for actionable scanner findings, `127` when a child command cannot be started, and the child's own exit code for `envbasis run`.
+
+### Secret Scanning
+
+Scan files and directories. Findings show only redacted matches:
+
+```bash
+envbasis scan .
+envbasis scan src config/settings.py
+envbasis scan --git-history
+envbasis scan --staged
+envbasis scan --uncommitted
+envbasis scan --pre-commit
+```
+
+The scanner detects common AWS, GitHub, OpenAI, Slack, Google, private-key, generic credential, and high-entropy patterns. Add repository-relative patterns to `.envbasisignore`, or add `envbasis:ignore` on a line to suppress an intentional match.
+
 ## Local Config, Precedence, And Security Notes
 
 ### Resolution Order
@@ -522,6 +701,7 @@ API URL resolution:
 1. `--api-url`
 2. `ENVBASIS_API_URL`
 3. `api_base_url` in `.envbasis.toml`
+4. the hosted EnvBasis API default
 
 Project and environment resolution:
 
@@ -534,7 +714,7 @@ For projects, the saved config can resolve through either `project_id` or `proje
 
 - Session secrets live in the OS keyring.
 - Local defaults live in `.envbasis.toml`.
-- Your application secrets typically live in `.env` when using `push` and `pull`.
+- Your application secrets typically live in `.env` when using `push` and `secrets pull`.
 
 ### Git Safety
 
@@ -542,9 +722,9 @@ This repo already ignores `.env` and `.envbasis.toml`.
 
 If you use the CLI inside another project repository, you should ignore those files there as well. The CLI checks git status for the target secret file and warns when that file is tracked or not ignored.
 
-### Current Working Directory Matters
+### Repository And Monorepo Lookup
 
-Because `.envbasis.toml` is read from the current working directory, different repositories or folders can maintain different selected projects and environments.
+EnvBasis starts in the current working directory and walks upward until it finds `.envbasis.toml`. The nearest file wins, so a nested application can override a repository-level configuration while sibling packages continue sharing the root file.
 
 ## JSON And Scripting Usage
 
@@ -565,7 +745,7 @@ You can combine `--json` with shell tools:
 
 ```bash
 envbasis --json whoami
-envbasis pull --stdout --format json
+envbasis secrets pull --stdout --format json
 ```
 
 Notes:
@@ -644,14 +824,14 @@ If login fails while saving or loading the session, your machine may not have a 
 Use explicit selection when needed:
 
 ```bash
-envbasis project use my-app
-envbasis env use dev
+envbasis project --select my-app
+envbasis environment dev
 ```
 
 Or override per command:
 
 ```bash
-envbasis --project my-app --env dev secrets list
+envbasis --project my-app --env dev secret
 ```
 
 ## Additional Docs
