@@ -1,0 +1,46 @@
+name: Publish CLI Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra dev
+      - run: uv run pytest -q
+      - run: uv build
+      - run: uv run --isolated --no-project --with ./dist/envbasis_cli-*.whl envbasis --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: cli/dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/envbasis-cli
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: python-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
