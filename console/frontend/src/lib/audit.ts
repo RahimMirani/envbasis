@@ -29,6 +29,16 @@ const actionLabels: Record<string, string> = {
   'audit_logs.viewed': 'viewed audit logs',
   'audit_logs.exported': 'exported audit logs',
   runtime_secrets_fetched: 'fetched runtime secrets',
+  'machine_identity.created': 'created a machine identity',
+  'machine_identity.updated': 'updated a machine identity',
+  'machine_identity.credential_rotated': 'rotated a machine credential',
+  'machine_identity.revoked': 'revoked a machine identity',
+  'machine_identity.authenticated': 'authenticated a machine identity',
+  'machine_identity.secrets_accessed': 'fetched machine-scoped secrets',
+  'webhook.created': 'created a webhook',
+  'webhook.test_sent': 'queued a webhook test',
+  'webhook.redelivery_requested': 'requested webhook redelivery',
+  'webhook.deleted': 'deleted a webhook',
   project_created: 'created the project',
   project_updated: 'updated the project',
   project_deleted: 'deleted the project',
@@ -67,6 +77,16 @@ const actionColors: Record<string, string> = {
   'audit_logs.viewed': 'info',
   'audit_logs.exported': 'info',
   runtime_secrets_fetched: 'info',
+  'machine_identity.created': 'success',
+  'machine_identity.updated': 'info',
+  'machine_identity.credential_rotated': 'warning',
+  'machine_identity.revoked': 'danger',
+  'machine_identity.authenticated': 'success',
+  'machine_identity.secrets_accessed': 'info',
+  'webhook.created': 'success',
+  'webhook.test_sent': 'info',
+  'webhook.redelivery_requested': 'warning',
+  'webhook.deleted': 'danger',
   project_created: 'success',
   project_updated: 'info',
   project_deleted: 'danger',
@@ -105,6 +125,16 @@ const actionIcons: Record<string, string> = {
   'audit_logs.viewed': 'activity',
   'audit_logs.exported': 'activity',
   runtime_secrets_fetched: 'pull',
+  'machine_identity.created': 'token',
+  'machine_identity.updated': 'token',
+  'machine_identity.credential_rotated': 'token',
+  'machine_identity.revoked': 'revoke',
+  'machine_identity.authenticated': 'activity',
+  'machine_identity.secrets_accessed': 'pull',
+  'webhook.created': 'activity',
+  'webhook.test_sent': 'activity',
+  'webhook.redelivery_requested': 'activity',
+  'webhook.deleted': 'revoke',
   project_created: 'project',
   project_updated: 'project',
   project_deleted: 'project',
@@ -162,6 +192,22 @@ export function getAuditDetails(log: AuditLog): string | null {
 
   if (typeof metadata.client_name === 'string') {
     return `Client: ${metadata.client_name}`;
+  }
+
+  if (typeof metadata.name === 'string' && typeof metadata.client_id === 'string') {
+    return `Identity: ${metadata.name}`;
+  }
+
+  if (typeof metadata.client_id === 'string') {
+    return `Client: ${metadata.client_id}`;
+  }
+
+  if (typeof metadata.secret_count === 'number') {
+    return `${metadata.secret_count} scoped secret${metadata.secret_count === 1 ? '' : 's'}`;
+  }
+
+  if (typeof metadata.url === 'string') {
+    return `Webhook: ${metadata.url}`;
   }
 
   return null;
