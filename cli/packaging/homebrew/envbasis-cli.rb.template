@@ -1,0 +1,23 @@
+class EnvbasisCli < Formula
+  desc "Securely inject, export, and scan application secrets with EnvBasis"
+  homepage "https://github.com/RahimMirani/envbasis"
+  version "VERSION"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "MACOS_ARM64_RELEASE_URL"
+      sha256 "MACOS_ARM64_SHA256"
+    else
+      url "MACOS_X86_64_RELEASE_URL"
+      sha256 "MACOS_X86_64_SHA256"
+    end
+  end
+
+  def install
+    bin.install Dir["envbasis*"][0] => "envbasis"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/envbasis --version")
+  end
+end
