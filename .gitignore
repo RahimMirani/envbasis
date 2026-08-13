@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+backend.env
+proxy.env
 
 # EnvBasis local CLI state
 .envbasis.toml
