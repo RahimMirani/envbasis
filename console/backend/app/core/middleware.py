@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import re
 from threading import Lock
 from time import monotonic
+from typing import Any
 from uuid import uuid4
 
 from fastapi import Request, Response
@@ -24,6 +26,11 @@ class RateLimitRule:
 class RateLimitResult:
     allowed: bool
     retry_after_seconds: int = 0
+    rule_name: str = "general"
+
+
+class RateLimiterUnavailable(RuntimeError):
+    pass
 
 
 class InMemoryRateLimiter:
@@ -32,8 +39,8 @@ class InMemoryRateLimiter:
         self._windows: dict[tuple[str, str], tuple[float, int]] = {}
 
     def check(self, request: Request) -> RateLimitResult:
-        if request.method == "OPTIONS":
-            return RateLimitResult(allowed=True)
+        if request.method == "OPTIONS" or _is_operational_path(request.url.path):
+            return RateLimitResult(allowed=True, rule_name="operational")
 
         rule = _get_rate_limit_rule(request.url.path)
         subject = _get_rate_limit_subject(request, rule.name)
@@ -44,18 +51,96 @@ class InMemoryRateLimiter:
             window = self._windows.get(key)
             if window is None or now - window[0] >= rule.window_seconds:
                 self._windows[key] = (now, 1)
-                return RateLimitResult(allowed=True)
+                return RateLimitResult(allowed=True, rule_name=rule.name)
 
             started_at, count = window
             if count >= rule.max_requests:
                 retry_after = max(1, int(rule.window_seconds - (now - started_at)))
-                return RateLimitResult(allowed=False, retry_after_seconds=retry_after)
+                return RateLimitResult(
+                    allowed=False,
+                    retry_after_seconds=retry_after,
+                    rule_name=rule.name,
+                )
 
             self._windows[key] = (started_at, count + 1)
-            return RateLimitResult(allowed=True)
+            return RateLimitResult(allowed=True, rule_name=rule.name)
+
+    def ping(self) -> bool:
+        return True
 
 
-rate_limiter = InMemoryRateLimiter()
+class RedisRateLimiter:
+    _CHECK_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {current, ttl}
+"""
+
+    def __init__(self, client: Any, *, key_prefix: str = "envbasis") -> None:
+        self._client = client
+        self._key_prefix = key_prefix.strip(":") or "envbasis"
+
+    @classmethod
+    def from_url(cls, url: str) -> "RedisRateLimiter":
+        try:
+            import redis
+        except ImportError as exc:  # pragma: no cover - deployment configuration
+            raise RuntimeError(
+                "The redis package is required when RATE_LIMIT_BACKEND=redis."
+            ) from exc
+        client = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=settings.redis_socket_timeout_seconds,
+            socket_timeout=settings.redis_socket_timeout_seconds,
+        )
+        return cls(client, key_prefix=settings.redis_key_prefix)
+
+    def check(self, request: Request) -> RateLimitResult:
+        if request.method == "OPTIONS" or _is_operational_path(request.url.path):
+            return RateLimitResult(allowed=True, rule_name="operational")
+
+        rule = _get_rate_limit_rule(request.url.path)
+        subject = _get_rate_limit_subject(request, rule.name)
+        subject_hash = sha256(subject.encode("utf-8")).hexdigest()
+        key = f"{self._key_prefix}:ratelimit:{rule.name}:{subject_hash}"
+        try:
+            raw_result = self._client.eval(
+                self._CHECK_SCRIPT,
+                1,
+                key,
+                rule.window_seconds,
+            )
+            count = int(raw_result[0])
+            ttl = int(raw_result[1])
+        except Exception as exc:
+            raise RateLimiterUnavailable("Shared rate limiter is unavailable.") from exc
+
+        return RateLimitResult(
+            allowed=count <= rule.max_requests,
+            retry_after_seconds=max(ttl, 1) if count > rule.max_requests else 0,
+            rule_name=rule.name,
+        )
+
+    def ping(self) -> bool:
+        try:
+            return bool(self._client.ping())
+        except Exception:
+            return False
+
+
+def build_rate_limiter() -> InMemoryRateLimiter | RedisRateLimiter:
+    if settings.rate_limit_backend == "redis":
+        if not settings.redis_url:
+            raise RuntimeError("REDIS_URL is required when RATE_LIMIT_BACKEND=redis.")
+        return RedisRateLimiter.from_url(settings.redis_url)
+    return InMemoryRateLimiter()
+
+
+rate_limiter = build_rate_limiter()
 
 
 def build_rate_limit_response(*, request_id: str, retry_after_seconds: int) -> JSONResponse:
@@ -70,8 +155,20 @@ def build_rate_limit_response(*, request_id: str, retry_after_seconds: int) -> J
     return response
 
 
+def build_rate_limiter_unavailable_response(*, request_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Request protection is temporarily unavailable.",
+            "request_id": request_id,
+        },
+        headers={"Retry-After": "1"},
+    )
+
+
 def apply_response_headers(request: Request, response: Response, *, request_id: str) -> Response:
     response.headers.setdefault("X-Request-ID", request_id)
+    response.headers.setdefault("X-API-Version", settings.api_version)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -81,23 +178,42 @@ def apply_response_headers(request: Request, response: Response, *, request_id: 
     if proto == "https":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
+    if _is_legacy_runtime_path(request.url.path):
+        response.headers.setdefault("Deprecation", "true")
+        response.headers.setdefault("Sunset", settings.api_deprecation_sunset)
+        response.headers.setdefault(
+            "Link",
+            '</api/v1/machine-identities/token>; rel="successor-version"',
+        )
+
     return response
 
 
 def assign_request_id(request: Request) -> str:
-    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    supplied_request_id = request.headers.get("X-Request-ID", "")
+    request_id = (
+        supplied_request_id
+        if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_request_id)
+        else str(uuid4())
+    )
     request.state.request_id = request_id
     return request_id
 
 
 def _get_rate_limit_rule(path: str) -> RateLimitRule:
-    if path.startswith(f"{settings.api_v1_prefix}/runtime/secrets"):
+    if path.startswith(f"{settings.api_v1_prefix}/runtime/secrets") or path.startswith(
+        f"{settings.api_v1_prefix}/machine/secrets"
+    ):
         return RateLimitRule(
             name="runtime",
             max_requests=settings.rate_limit_runtime_requests,
             window_seconds=settings.rate_limit_runtime_window_seconds,
         )
-    if path.startswith(f"{settings.api_v1_prefix}/auth"):
+    if (
+        path.startswith(f"{settings.api_v1_prefix}/auth")
+        or path.startswith(f"{settings.api_v1_prefix}/cli/auth")
+        or path.startswith(f"{settings.api_v1_prefix}/machine-identities/token")
+    ):
         return RateLimitRule(
             name="auth",
             max_requests=settings.rate_limit_auth_requests,
@@ -114,6 +230,19 @@ def _get_rate_limit_rule(path: str) -> RateLimitRule:
         max_requests=settings.rate_limit_general_requests,
         window_seconds=settings.rate_limit_general_window_seconds,
     )
+
+
+def _is_operational_path(path: str) -> bool:
+    return path in {
+        f"{settings.api_v1_prefix}/health",
+        f"{settings.api_v1_prefix}/live",
+        f"{settings.api_v1_prefix}/ready",
+        f"{settings.api_v1_prefix}/metrics",
+    }
+
+
+def _is_legacy_runtime_path(path: str) -> bool:
+    return "/runtime-tokens" in path or path == f"{settings.api_v1_prefix}/runtime/secrets"
 
 
 def _get_rate_limit_subject(request: Request, rule_name: str) -> str:
