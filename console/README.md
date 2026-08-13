@@ -871,7 +871,7 @@ These repo-level checks were verified against the current tree while preparing t
 
 - `frontend/package.json` exposes `dev`, `build`, `lint`, and `preview`
 - `npm run build` succeeds in `frontend/`
-- `backend/pyproject.toml` requires Python `>=3.9,<4.0`
+- `backend/pyproject.toml` requires Python `>=3.10,<4.0`
 - `backend/requirements-dev.txt` installs backend runtime dependencies plus `pytest`
 - `python3 -m pytest` in `backend/` currently collects zero tests
 - No root-level build tooling exists; commands are run per subdirectory
