@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 import app.services.audit as audit_service
 from app.core.config import settings
 from app.core.middleware import rate_limiter
+from app.core.metrics import request_metrics
 from app.db.base import Base
 from app.models.audit_log import AuditLog
 from app.models.environment import Environment
@@ -26,8 +27,10 @@ from app.models.user import User
 @pytest.fixture
 def session_factory(monkeypatch: pytest.MonkeyPatch) -> Iterator[sessionmaker[Session]]:
     settings.secrets_master_key = Fernet.generate_key().decode("utf-8")
+    settings.api_idempotency_encryption_key = Fernet.generate_key().decode("utf-8")
     audit_service._last_cleanup_at = None
     rate_limiter._windows.clear()
+    request_metrics.reset()
 
     engine = create_engine(
         "sqlite://",
