@@ -376,7 +376,7 @@ Create `backend/.env` with values matching the tables below. A minimal local exa
 
 ```dotenv
 APP_ENV=development
-DEBUG=true
+ENVBASIS_DEBUG=true
 API_V1_PREFIX=/api/v1
 DATABASE_URL=postgresql+psycopg://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
 SUPABASE_URL=https://<project-ref>.supabase.co
@@ -509,13 +509,20 @@ flowchart LR
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | Yes | None | Must point to Supabase Postgres. Localhost and `127.0.0.1` are rejected in all environments |
-| `SECRETS_MASTER_KEY` | Yes | None | Fernet key used to encrypt secret values and stored runtime tokens |
+| `SECRETS_MASTER_KEY` | Conditional | None | Local root key used to wrap project keys and decrypt legacy data; required when `SECRETS_ROOT_KEY_PROVIDER=local` |
+| `SECRETS_ROOT_KEY_PROVIDER` | No | `local` | Root-key provider: `local` or `aws_kms` |
+| `AWS_KMS_KEY_ID` | Conditional | None | Required when `SECRETS_ROOT_KEY_PROVIDER=aws_kms` |
+| `AWS_KMS_REGION` | No | SDK default | AWS region for KMS operations |
 | `SUPABASE_JWT_SECRET` | Conditional | None | Required when `SUPABASE_JWT_ALGORITHM=HS256`, which is the default |
 | `SUPABASE_URL` | Conditional | `None` | Required when `SUPABASE_JWT_ALGORITHM` is `RS256` or `ES256`; safe to set in all environments |
 | `SUPABASE_JWT_AUDIENCE` | No | `authenticated` | Access token audience expected by the backend |
+| `MACHINE_AUTH_JWT_SECRET` | Yes in production | None | Separate long random secret used to sign short-lived machine access tokens |
+| `RATE_LIMIT_BACKEND` | Yes in production | `memory` | Use `redis` in production; memory mode is for local development and tests |
+| `REDIS_URL` | Yes in production | None | Authenticated Redis connection URL used for shared rate-limit counters |
+| `API_IDEMPOTENCY_ENCRYPTION_KEY` | Yes in production | None | Independent Fernet key that encrypts replayable API response bodies |
 | `CORS_ALLOWED_ORIGINS` | Yes in production | Empty list | Comma-separated origins, for example `http://localhost:5173` |
 | `APP_ENV` | No | `development` | Only `prod` and `production` trigger stricter production validation |
-| `DEBUG` | No | `false` | Must be `false` in production |
+| `ENVBASIS_DEBUG` | No | `false` | Must be `false` in production; namespaced to avoid generic shell-variable collisions |
 
 ### Backend Advanced and Defaulted Settings
 
@@ -527,6 +534,21 @@ flowchart LR
 | `SUPABASE_JWT_ALGORITHM` | `HS256` | Current code supports `HS256`, `ES256`, and `RS256` |
 | `RUNTIME_TOKEN_PREFIX` | `envb_rt_` | Prefix used when generating runtime tokens |
 | `RUNTIME_TOKEN_BYTES` | `32` | Passed to `secrets.token_urlsafe()` before prefixing |
+| `MACHINE_AUTH_DEFAULT_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Default lifetime for machine access tokens |
+| `MACHINE_AUTH_MIN_ACCESS_TOKEN_TTL_SECONDS` | `300` | Lowest per-identity access-token lifetime |
+| `MACHINE_AUTH_MAX_ACCESS_TOKEN_TTL_SECONDS` | `86400` | Highest per-identity access-token lifetime |
+| `WEBHOOK_REQUEST_TIMEOUT_SECONDS` | `10` | Connection and response timeout for one webhook attempt |
+| `WEBHOOK_MAX_ATTEMPTS` | `5` | Maximum attempts for one logical webhook delivery |
+| `WEBHOOK_RETRY_BASE_SECONDS` | `30` | Initial retry delay before exponential growth |
+| `WEBHOOK_RETRY_MAX_SECONDS` | `3600` | Maximum delay between webhook attempts |
+| `WEBHOOK_WORKER_POLL_SECONDS` | `1.0` | Idle polling interval for the standalone webhook worker |
+| `WEBHOOK_WORKER_BATCH_SIZE` | `25` | Maximum due jobs claimed in one worker transaction |
+| `REDIS_KEY_PREFIX` | `envbasis` | Namespace prefix for rate-limit keys |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` | `1.0` | Redis connect and operation timeout |
+| `LOG_LEVEL` | `INFO` | Minimum application log level |
+| `LOG_JSON` | `true` | Emit structured JSON logs when enabled |
+| `API_IDEMPOTENCY_RETENTION_SECONDS` | `86400` | Completed response replay window |
+| `API_IDEMPOTENCY_PENDING_SECONDS` | `300` | Time before an abandoned in-progress key may be reclaimed |
 | `RATE_LIMIT_AUTH_REQUESTS` | `120` | Requests per auth window |
 | `RATE_LIMIT_AUTH_WINDOW_SECONDS` | `60` | Auth rate limit window |
 | `RATE_LIMIT_SECRET_REQUESTS` | `300` | Requests per secret push/pull window |
@@ -545,6 +567,7 @@ flowchart LR
 - The frontend keeps auth in memory only. Refreshing the page clears the browser-side session.
 - Users must authenticate once before an owner can invite them to a project or share a runtime token with them.
 - `SECRETS_MASTER_KEY` must be a real Fernet key, not an arbitrary string.
+- Run `python -m app.workers.webhooks` as a separate long-lived process; the API only persists jobs and never performs destination requests inline.
 - If you switch `SUPABASE_JWT_ALGORITHM` to `RS256` or `ES256`, `SUPABASE_URL` becomes operationally required for JWKS lookup.
 - The frontend expects Supabase OAuth redirect handling at `/auth/callback`.
 
@@ -681,13 +704,14 @@ Extra safeguard:
 - If the member has already revealed any shared token, `keep_active` is rejected as unsafe.
 - In that case the operator must choose `revoke_tokens` or rotate tokens separately before retrying.
 
-### 6. Create, share, reveal, revoke, and use runtime tokens
+### 6. Create, revoke, and use runtime tokens
 
 From the Runtime Tokens page:
 
 - Owners create tokens for one environment at a time
 - Owners can share an active token with an existing project member
-- Owners and shared recipients can reveal active tokens
+- New tokens are displayed once and stored only as hashes
+- Only legacy encrypted tokens can be shared or revealed during migration
 - Owners can revoke tokens
 
 Shipped behavior to know:
@@ -741,7 +765,7 @@ Project deletion cascades through related data because the SQLAlchemy models and
 - New authenticated users are auto-provisioned in the backend database on first request.
 - Project owners have full access to their project.
 - Members can access project metadata, and secret access is gated by `can_push_pull_secrets`.
-- Secret values are encrypted at rest with Fernet via `SECRETS_MASTER_KEY`.
+- Secret values use per-project Fernet data keys; those keys are wrapped by the configured local root key or AWS KMS.
 - Runtime tokens are stored as:
   - a SHA-256 hash for lookup
   - encrypted plaintext for later reveal to authorized users
