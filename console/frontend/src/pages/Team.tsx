@@ -54,7 +54,7 @@ type TriState = 'on' | 'off' | 'mixed';
 
 const PERMISSIONS: { key: PermissionKey; label: string }[] = [
   { key: 'can_push_pull_secrets', label: 'Push/pull secrets' },
-  { key: 'can_manage_runtime_tokens', label: 'Manage runtime tokens' },
+  { key: 'can_manage_runtime_tokens', label: 'Manage machine identities' },
   { key: 'can_manage_team', label: 'Manage team' },
   { key: 'can_view_audit_logs', label: 'View audit logs' },
 ];
