@@ -37,6 +37,7 @@ Each subproject has its own README with setup instructions:
 - **Dashboard + backend setup:** [`console/README.md`](./console/README.md)
 - **CLI usage and commands:** [`cli/README.md`](./cli/README.md)
 - **Agent Proxy setup and supported operations:** [`proxy/README.md`](./proxy/README.md)
+- **AWS backend + proxy deployment:** [`deploy/README.md`](./deploy/README.md)
 
 ---
 
