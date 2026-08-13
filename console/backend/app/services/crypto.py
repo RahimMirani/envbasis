@@ -40,6 +40,37 @@ def decrypt_secret_value(value: bytes) -> str:
         raise RuntimeError("Encrypted secret value could not be decrypted.") from exc
 
 
+def generate_data_encryption_key() -> bytes:
+    return Fernet.generate_key()
+
+
+def wrap_data_encryption_key(data_key: bytes) -> bytes:
+    return _get_fernet().encrypt(data_key)
+
+
+def unwrap_data_encryption_key(wrapped_key: bytes) -> bytes:
+    try:
+        data_key = _get_fernet().decrypt(wrapped_key)
+        Fernet(data_key)
+        return data_key
+    except (InvalidToken, TypeError, ValueError) as exc:
+        raise RuntimeError("Project encryption key could not be unwrapped.") from exc
+
+
+def encrypt_with_data_key(value: str, data_key: bytes) -> bytes:
+    try:
+        return Fernet(data_key).encrypt(value.encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Project encryption key is invalid.") from exc
+
+
+def decrypt_with_data_key(value: bytes, data_key: bytes) -> str:
+    try:
+        return Fernet(data_key).decrypt(value).decode("utf-8")
+    except (InvalidToken, TypeError, ValueError) as exc:
+        raise RuntimeError("Encrypted project secret could not be decrypted.") from exc
+
+
 def encrypt_text(value: str) -> bytes:
     return _get_fernet().encrypt(value.encode("utf-8"))
 
