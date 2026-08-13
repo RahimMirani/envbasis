@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "UseOnlyTheEnvBasisRootKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:AWS_REGION:AWS_ACCOUNT_ID:key/KMS_KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:envbasis:purpose": "project-data-encryption-key"
+        }
+      }
+    }
+  ]
+}
