@@ -140,7 +140,7 @@ export default function EnvironmentsPage() {
           <h1 className="page-heading">Environments</h1>
           <p className="page-subtitle">
             Separate your secrets by environment. Each environment has its own set of secrets and
-            runtime tokens.
+            machine identities.
           </p>
         </div>
         <div className="page-header-actions">
@@ -321,7 +321,7 @@ export default function EnvironmentsPage() {
         title="Delete Environment"
         description={
           envPendingDelete
-            ? `Delete "${envPendingDelete.name}"? All secrets and runtime tokens in this environment will be permanently deleted.`
+            ? `Delete "${envPendingDelete.name}"? All secrets, machine identities, and legacy runtime tokens in this environment will be permanently deleted.`
             : ''
         }
         errorMessage={deleteError}
