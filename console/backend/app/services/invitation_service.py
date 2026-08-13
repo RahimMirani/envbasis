@@ -23,6 +23,7 @@ from app.schemas.invitation import (
 from app.schemas.member import ProjectMemberRead
 from app.services.audit import write_audit_log
 from app.services.invite_email import send_project_invite_email
+from app.services.member_permissions import get_undelegable_permissions
 
 INVITE_EXPIRY_DAYS = 15
 INVITE_COOLDOWN_DAYS = 5
@@ -80,7 +81,10 @@ def assert_can_send(invitation: ProjectInvitation) -> None:
 def mark_expired_pending(db: Session, invitation: ProjectInvitation) -> None:
     if invitation.status != "pending":
         return
-    if invitation.expires_at > utcnow():
+    expires_at = invitation.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at > utcnow():
         return
     invitation.status = "expired"
     write_audit_log(
@@ -435,6 +439,46 @@ def accept_invitation(
     project = db.get(Project, invitation.project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    invalid_reason: str | None = None
+    if invitation.role != "member":
+        invalid_reason = "invalid_role"
+    elif invitation.invited_by_user_id != project.owner_id:
+        inviter_membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == invitation.invited_by_user_id,
+            )
+        )
+        if inviter_membership is None or not inviter_membership.can_manage_team:
+            invalid_reason = "inviter_no_longer_manages_team"
+        elif get_undelegable_permissions(
+            actor_permissions=inviter_membership,
+            requested_permissions=invitation,
+        ):
+            invalid_reason = "inviter_lacks_granted_permissions"
+
+    if invalid_reason is not None:
+        invitation.status = "revoked"
+        write_audit_log(
+            db,
+            project_id=project.id,
+            user_id=invitation.invited_by_user_id,
+            action="invitation.revoked",
+            metadata={
+                "invitation_id": str(invitation.id),
+                "email": invitation.email_normalized,
+                "reason": invalid_reason,
+            },
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This invitation can no longer grant its requested permissions. "
+                "Ask a project owner to send a new invitation."
+            ),
+        )
 
     existing = db.scalar(
         select(ProjectMember).where(
