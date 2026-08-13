@@ -346,6 +346,7 @@ export default function ProjectLayout() {
           projectName={currentProject.name}
           projectRole={currentProject.role}
           canViewAuditLogs={currentProject.can_view_audit_logs}
+          canManageMachineIdentities={currentProject.can_manage_runtime_tokens}
           currentProjectId={currentProject.id}
           projects={projects}
           open={sidebarOpen}
