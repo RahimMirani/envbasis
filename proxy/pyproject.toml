@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "envbasis-proxy"
+version = "0.1.0"
+description = "Credential-injecting request proxy for EnvBasis machine identities."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi>=0.110,<1.0",
+  "httpx>=0.28,<1.0",
+  "PyJWT>=2.8,<3.0",
+  "pydantic-settings>=2.2,<3.0",
+  "uvicorn[standard]>=0.27,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/envbasis_proxy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
