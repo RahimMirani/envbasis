@@ -15,6 +15,12 @@ import type {
   ProjectInvitation,
   RuntimeToken,
   RuntimeTokenShare,
+  MachineIdentity,
+  MachineIdentityCredential,
+  MachineIdentityWrite,
+  MachineCredential,
+  MachineCredentialSecret,
+  MachineAuthEvent,
   AuditLog,
   UnifiedAuditLogListResponse,
   SecretStats,
@@ -23,6 +29,21 @@ import type {
   CliAuthRequest,
   RequestOptions,
   ApiErrorDetails,
+  SecretFolder,
+  SecretFolderListResponse,
+  ProjectSecretTag,
+  SecretImportRule,
+  SecretVersionListResponse,
+  HistoricalSecret,
+  SecretRollbackResult,
+  AccessRole,
+  AccessRoleAssignment,
+  ApprovalPolicy,
+  ApprovalRequest,
+  SecretRetention,
+  RecoveryResult,
+  Organization,
+  PermissionSimulation,
 } from '../types/api';
 
 export class ApiError extends Error {
@@ -190,7 +211,7 @@ export function getProject(
 export function updateProject(
   projectId: string,
   accessToken: string,
-  body: { name?: string; description?: string | null; audit_log_visibility?: 'owner_only' | 'members' | 'specific' },
+  body: { name?: string; description?: string | null; audit_log_visibility?: 'owner_only' | 'members' | 'specific'; organization_id?: string | null },
   options: RequestOptions = {}
 ): Promise<Project> {
   return apiRequest<Project>(`/projects/${encodePathSegment(projectId)}`, {
@@ -271,10 +292,15 @@ export function listSecrets(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  options: RequestOptions & { key?: string } = {}
+  options: RequestOptions & { key?: string; path?: string; recursive?: boolean; tags?: string[] } = {}
 ): Promise<SecretListResponse> {
-  const { key, ...rest } = options;
-  const params = key ? `?key=${encodeURIComponent(key)}` : '';
+  const { key, path, recursive, tags, ...rest } = options;
+  const search = new URLSearchParams();
+  if (key) search.set('key', key);
+  if (path) search.set('path', path);
+  if (recursive) search.set('recursive', 'true');
+  tags?.forEach((tag) => search.append('tag', tag));
+  const params = search.size ? `?${search.toString()}` : '';
   return apiRequest<SecretListResponse>(
     `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets${params}`,
     { ...rest, accessToken }
@@ -289,9 +315,12 @@ export function listProjectSecrets(
     environmentIds?: string[];
     limit?: number;
     cursor?: string | null;
+    path?: string;
+    recursive?: boolean;
+    tags?: string[];
   } = {}
 ): Promise<ProjectSecretListResponse> {
-  const { key, environmentIds, limit, cursor, ...rest } = options;
+  const { key, environmentIds, limit, cursor, path, recursive, tags, ...rest } = options;
   const params = new URLSearchParams();
 
   if (key) {
@@ -303,6 +332,9 @@ export function listProjectSecrets(
   if (cursor) {
     params.set('cursor', cursor);
   }
+  if (path) params.set('path', path);
+  if (recursive) params.set('recursive', 'true');
+  tags?.forEach((tag) => params.append('tag', tag));
   environmentIds?.forEach((environmentId) => {
     params.append('environment_id', environmentId);
   });
@@ -318,12 +350,14 @@ export function revealSecret(
   environmentId: string,
   secretKey: string,
   accessToken: string,
-  options: RequestOptions = {}
+  options: RequestOptions & { path?: string } = {}
 ): Promise<RevealedSecret> {
+  const { path, ...rest } = options;
+  const params = path ? `?path=${encodeURIComponent(path)}` : '';
   return apiRequest<RevealedSecret>(
-    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}/reveal`,
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}/reveal${params}`,
     {
-      ...options,
+      ...rest,
       accessToken,
     }
   );
@@ -333,7 +367,19 @@ export function createSecret(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  body: { key: string; value: string; expires_at?: string | null },
+  body: {
+    key: string;
+    value: string;
+    expires_at?: string | null;
+    path?: string;
+    tags?: string[];
+    description?: string | null;
+    owner?: string | null;
+    service?: string | null;
+    rotation_interval_days?: number | null;
+    rotate_at?: string | null;
+    custom_metadata?: Record<string, string>;
+  },
   options: RequestOptions = {}
 ): Promise<Secret> {
   return apiRequest<Secret>(
@@ -352,13 +398,25 @@ export function updateSecret(
   environmentId: string,
   secretKey: string,
   accessToken: string,
-  body: { value: string; expires_at?: string | null },
-  options: RequestOptions = {}
+  body: {
+    value: string;
+    expires_at?: string | null;
+    tags?: string[];
+    description?: string | null;
+    owner?: string | null;
+    service?: string | null;
+    rotation_interval_days?: number | null;
+    rotate_at?: string | null;
+    custom_metadata?: Record<string, string>;
+  },
+  options: RequestOptions & { path?: string } = {}
 ): Promise<Secret> {
+  const { path, ...rest } = options;
+  const params = path ? `?path=${encodeURIComponent(path)}` : '';
   return apiRequest<Secret>(
-    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}`,
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}${params}`,
     {
-      ...options,
+      ...rest,
       method: 'PATCH',
       accessToken,
       body,
@@ -371,12 +429,14 @@ export function deleteSecret(
   environmentId: string,
   secretKey: string,
   accessToken: string,
-  options: RequestOptions = {}
+  options: RequestOptions & { path?: string } = {}
 ): Promise<void> {
+  const { path, ...rest } = options;
+  const params = path ? `?path=${encodeURIComponent(path)}` : '';
   return apiRequest<void>(
-    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}`,
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}${params}`,
     {
-      ...options,
+      ...rest,
       method: 'DELETE',
       accessToken,
     }
@@ -386,7 +446,7 @@ export function deleteSecret(
 export function bulkDeleteSecrets(
   projectId: string,
   accessToken: string,
-  body: { items: Array<{ environment_id: string; key: string }> },
+  body: { items: Array<{ environment_id: string; key: string; path?: string }> },
   options: RequestOptions = {}
 ): Promise<void> {
   return apiRequest<void>(`/projects/${encodePathSegment(projectId)}/secrets/bulk-delete`, {
@@ -412,7 +472,7 @@ export function pushSecrets(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  body: { secrets: Record<string, string> },
+  body: { secrets: Record<string, string>; path?: string; tags?: string[] },
   options: RequestOptions = {}
 ): Promise<PushSecretsResponse> {
   return apiRequest<PushSecretsResponse>(
@@ -430,14 +490,162 @@ export function pullSecrets(
   projectId: string,
   environmentId: string,
   accessToken: string,
-  options: RequestOptions = {}
+  options: RequestOptions & { path?: string; recursive?: boolean; tags?: string[] } = {}
 ): Promise<PullSecretsResponse> {
+  const { path, recursive, tags, ...rest } = options;
+  const search = new URLSearchParams();
+  if (path) search.set('path', path);
+  if (recursive) search.set('recursive', 'true');
+  tags?.forEach((tag) => search.append('tag', tag));
+  const params = search.size ? `?${search.toString()}` : '';
   return apiRequest<PullSecretsResponse>(
-    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/pull`,
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/pull${params}`,
     {
-      ...options,
+      ...rest,
       accessToken,
     }
+  );
+}
+
+export function listSecretFolders(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  options: RequestOptions & { path?: string; recursive?: boolean } = {}
+): Promise<SecretFolderListResponse> {
+  const { path = '/', recursive = false, ...rest } = options;
+  const search = new URLSearchParams({ path, recursive: String(recursive) });
+  return apiRequest<SecretFolderListResponse>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/folders?${search.toString()}`,
+    { ...rest, accessToken }
+  );
+}
+
+export function createSecretFolder(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  body: { path: string; description?: string | null },
+  options: RequestOptions = {}
+): Promise<SecretFolder> {
+  return apiRequest<SecretFolder>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/folders`,
+    { ...options, method: 'POST', accessToken, body }
+  );
+}
+
+export function listProjectSecretTags(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<ProjectSecretTag[]> {
+  return apiRequest<ProjectSecretTag[]>(`/projects/${encodePathSegment(projectId)}/secret-tags`, {
+    ...options,
+    accessToken,
+  });
+}
+
+export function createProjectSecretTag(
+  projectId: string,
+  accessToken: string,
+  body: { name: string; color?: string | null; description?: string | null },
+  options: RequestOptions = {}
+): Promise<ProjectSecretTag> {
+  return apiRequest<ProjectSecretTag>(`/projects/${encodePathSegment(projectId)}/secret-tags`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
+}
+
+export function listSecretImports(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<SecretImportRule[]> {
+  return apiRequest<SecretImportRule[]>(`/projects/${encodePathSegment(projectId)}/secret-imports`, {
+    ...options,
+    accessToken,
+  });
+}
+
+export function createSecretImport(
+  projectId: string,
+  accessToken: string,
+  body: {
+    target_environment_id: string;
+    target_path: string;
+    source_environment_id: string;
+    source_path: string;
+    recursive?: boolean;
+    priority?: number;
+    enabled?: boolean;
+  },
+  options: RequestOptions = {}
+): Promise<SecretImportRule> {
+  return apiRequest<SecretImportRule>(`/projects/${encodePathSegment(projectId)}/secret-imports`, {
+    ...options,
+    method: 'POST',
+    accessToken,
+    body,
+  });
+}
+
+export function deleteSecretImport(
+  projectId: string,
+  importId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<void> {
+  return apiRequest<void>(
+    `/projects/${encodePathSegment(projectId)}/secret-imports/${encodePathSegment(importId)}`,
+    { ...options, method: 'DELETE', accessToken }
+  );
+}
+
+export function listSecretVersions(
+  projectId: string,
+  environmentId: string,
+  secretKey: string,
+  accessToken: string,
+  options: RequestOptions & { path?: string; includeArchived?: boolean } = {}
+): Promise<SecretVersionListResponse> {
+  const { path = '/', includeArchived = true, ...rest } = options;
+  const search = new URLSearchParams({ path, include_archived: String(includeArchived) });
+  return apiRequest<SecretVersionListResponse>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}/versions?${search.toString()}`,
+    { ...rest, accessToken }
+  );
+}
+
+export function revealSecretVersion(
+  projectId: string,
+  environmentId: string,
+  secretKey: string,
+  version: number,
+  accessToken: string,
+  options: RequestOptions & { path?: string } = {}
+): Promise<HistoricalSecret> {
+  const { path = '/', ...rest } = options;
+  return apiRequest<HistoricalSecret>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}/versions/${version}/reveal?path=${encodeURIComponent(path)}`,
+    { ...rest, accessToken }
+  );
+}
+
+export function rollbackSecretVersion(
+  projectId: string,
+  environmentId: string,
+  secretKey: string,
+  version: number,
+  accessToken: string,
+  options: RequestOptions & { path?: string } = {}
+): Promise<SecretRollbackResult> {
+  const { path = '/', ...rest } = options;
+  return apiRequest<SecretRollbackResult>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/${encodePathSegment(secretKey)}/versions/${version}/rollback?path=${encodeURIComponent(path)}`,
+    { ...rest, method: 'POST', accessToken }
   );
 }
 
@@ -883,6 +1091,162 @@ export function sendTestWebhook(
   );
 }
 
+export function redeliverWebhookDelivery(
+  projectId: string,
+  webhookId: string,
+  deliveryId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<WebhookDelivery> {
+  return apiRequest<WebhookDelivery>(
+    `/projects/${encodePathSegment(projectId)}/webhooks/${encodePathSegment(webhookId)}/deliveries/${encodePathSegment(deliveryId)}/redeliver`,
+    {
+      ...options,
+      method: 'POST',
+      accessToken,
+    }
+  );
+}
+
+// Machine identities
+
+export function listMachineIdentities(
+  projectId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<MachineIdentity[]> {
+  return apiRequest<MachineIdentity[]>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities`,
+    { ...options, accessToken }
+  );
+}
+
+export function createMachineIdentity(
+  projectId: string,
+  accessToken: string,
+  body: MachineIdentityWrite,
+  options: RequestOptions = {}
+): Promise<MachineIdentityCredential> {
+  return apiRequest<MachineIdentityCredential>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities`,
+    { ...options, method: 'POST', accessToken, body }
+  );
+}
+
+export function updateMachineIdentity(
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  body: Partial<MachineIdentityWrite>,
+  options: RequestOptions = {}
+): Promise<MachineIdentity> {
+  return apiRequest<MachineIdentity>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}`,
+    { ...options, method: 'PATCH', accessToken, body }
+  );
+}
+
+export function rotateMachineIdentitySecret(
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  body: {
+    credential_expires_at: string | null;
+    credential_id?: string;
+    overlap_seconds?: number;
+  },
+  options: RequestOptions = {}
+): Promise<MachineIdentityCredential> {
+  return apiRequest<MachineIdentityCredential>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}/rotate-secret`,
+    { ...options, method: 'POST', accessToken, body }
+  );
+}
+
+export function createMachineCredential(
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  body: { name: string; credential_expires_at: string | null },
+  options: RequestOptions = {}
+): Promise<MachineCredentialSecret> {
+  return apiRequest<MachineCredentialSecret>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}/credentials`,
+    { ...options, method: 'POST', accessToken, body }
+  );
+}
+
+export function revokeMachineCredential(
+  projectId: string,
+  identityId: string,
+  credentialId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<MachineCredential> {
+  return apiRequest<MachineCredential>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}/credentials/${encodePathSegment(credentialId)}`,
+    { ...options, method: 'DELETE', accessToken }
+  );
+}
+
+function updateMachineIdentityStatus(
+  action: 'disable' | 'enable' | 'unlock',
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<MachineIdentity> {
+  return apiRequest<MachineIdentity>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}/${action}`,
+    { ...options, method: 'POST', accessToken }
+  );
+}
+
+export const disableMachineIdentity = (
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+) => updateMachineIdentityStatus('disable', projectId, identityId, accessToken, options);
+
+export const enableMachineIdentity = (
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+) => updateMachineIdentityStatus('enable', projectId, identityId, accessToken, options);
+
+export const unlockMachineIdentity = (
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+) => updateMachineIdentityStatus('unlock', projectId, identityId, accessToken, options);
+
+export function listMachineAuthHistory(
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<MachineAuthEvent[]> {
+  return apiRequest<MachineAuthEvent[]>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}/auth-history`,
+    { ...options, accessToken }
+  );
+}
+
+export function revokeMachineIdentity(
+  projectId: string,
+  identityId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<MachineIdentity> {
+  return apiRequest<MachineIdentity>(
+    `/projects/${encodePathSegment(projectId)}/machine-identities/${encodePathSegment(identityId)}/revoke`,
+    { ...options, method: 'POST', accessToken }
+  );
+}
+
 // CLI Auth
 
 export function resolveCliAuthCode(
@@ -922,4 +1286,74 @@ export function denyCliAuthCode(
     accessToken,
     body: { user_code: code },
   });
+}
+
+// Phase 2 governance
+
+export function listAccessRoles(projectId: string, accessToken: string): Promise<AccessRole[]> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/access-roles`, { accessToken });
+}
+
+export function createAccessRole(
+  projectId: string,
+  accessToken: string,
+  body: { name: string; description?: string; organization_id?: string; permissions: Array<Omit<import('../types/api').AccessPermission, 'id'>> }
+): Promise<AccessRole> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/access-roles`, { method: 'POST', accessToken, body });
+}
+
+export function listAccessAssignments(projectId: string, accessToken: string): Promise<AccessRoleAssignment[]> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/access-assignments`, { accessToken });
+}
+
+export function createAccessAssignment(projectId: string, accessToken: string, body: { role_id: string; user_id?: string; machine_identity_id?: string }): Promise<AccessRoleAssignment> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/access-assignments`, { method: 'POST', accessToken, body });
+}
+
+export function deleteAccessAssignment(projectId: string, assignmentId: string, accessToken: string): Promise<void> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/access-assignments/${encodePathSegment(assignmentId)}`, { method: 'DELETE', accessToken });
+}
+
+export function listApprovalPolicies(projectId: string, accessToken: string): Promise<ApprovalPolicy[]> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/approval-policies`, { accessToken });
+}
+
+export function createApprovalPolicy(projectId: string, accessToken: string, body: Omit<ApprovalPolicy, 'id' | 'project_id' | 'created_at' | 'updated_at'>): Promise<ApprovalPolicy> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/approval-policies`, { method: 'POST', accessToken, body });
+}
+
+export function listApprovalRequests(projectId: string, accessToken: string): Promise<ApprovalRequest[]> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/approval-requests`, { accessToken });
+}
+
+export function actOnApprovalRequest(projectId: string, requestId: string, accessToken: string, body: { action: 'approve' | 'reject' | 'cancel' | 'comment'; comment?: string }): Promise<ApprovalRequest> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/approval-requests/${encodePathSegment(requestId)}/actions`, { method: 'POST', accessToken, body });
+}
+
+export function getSecretRetention(projectId: string, accessToken: string): Promise<SecretRetention> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/secret-retention`, { accessToken });
+}
+
+export function updateSecretRetention(projectId: string, accessToken: string, body: { retain_versions: number; retain_days: number | null; archive_deleted_after_days: number | null }): Promise<SecretRetention> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/secret-retention`, { method: 'PATCH', accessToken, body });
+}
+
+export function recoverEnvironmentSecrets(projectId: string, environmentId: string, accessToken: string, body: { at: string; path: string; recursive: boolean; dry_run: boolean }): Promise<RecoveryResult> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/secrets/recovery`, { method: 'POST', accessToken, body });
+}
+
+export function listOrganizations(accessToken: string): Promise<Organization[]> {
+  return apiRequest('/organizations', { accessToken });
+}
+
+export function createOrganization(accessToken: string, body: { name: string }): Promise<Organization> {
+  return apiRequest('/organizations', { method: 'POST', accessToken, body });
+}
+
+export function simulatePermission(projectId: string, accessToken: string, body: { user_id?: string; machine_identity_id?: string; resource: string; action: string; environment_id?: string | null; path?: string | null }): Promise<PermissionSimulation> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/permissions/simulate`, { method: 'POST', accessToken, body });
+}
+
+export function createApprovalRequest(projectId: string, accessToken: string, body: { environment_id: string; path: string; secret_key: string; operation: 'create' | 'update' | 'delete'; value?: string; metadata?: Record<string, unknown>; comment?: string }): Promise<ApprovalRequest> {
+  return apiRequest(`/projects/${encodePathSegment(projectId)}/approval-requests`, { method: 'POST', accessToken, body });
 }
