@@ -22,7 +22,7 @@ import CodeBlock from '../components/CodeBlock';
 import OwnerOnlyHint from '../components/OwnerOnlyHint';
 import SectionLoader from '../components/SectionLoader';
 import { useAuth } from '../auth/useAuth';
-import { listAuditLogs, listProjectInvitations } from '../lib/api';
+import { listAuditLogs, listMachineIdentities, listProjectInvitations } from '../lib/api';
 import {
   getAuditActionLabel,
   getAuditColor,
@@ -48,6 +48,7 @@ interface OutletContextType {
 interface OverviewCacheEntry {
   activityLogs: AuditLog[];
   pendingInviteCount: number;
+  machineIdentityCount: number;
 }
 
 const activityIcons: Record<string, LucideIcon> = {
@@ -80,6 +81,9 @@ export default function OverviewPage() {
   const cachedOverview = pageCache.get<OverviewCacheEntry>(overviewCacheKey);
   const [activityLogs, setActivityLogs] = useState<AuditLog[]>(() => cachedOverview?.activityLogs ?? []);
   const [pendingInviteCount, setPendingInviteCount] = useState(() => cachedOverview?.pendingInviteCount ?? 0);
+  const [machineIdentityCount, setMachineIdentityCount] = useState(
+    () => cachedOverview?.machineIdentityCount ?? 0
+  );
   const [isLoading, setIsLoading] = useState(() => !cachedOverview);
 
   const totalSecretCount = secretStats?.total_secret_count;
@@ -102,8 +106,13 @@ export default function OverviewPage() {
       setIsLoading(true);
 
       try {
-        if (currentProject.role === 'owner' || canViewAuditLogs || canManageTeam) {
-          const [logs, invites] = await Promise.all([
+        if (
+          currentProject.role === 'owner' ||
+          canViewAuditLogs ||
+          canManageTeam ||
+          canManageRuntimeTokens
+        ) {
+          const [logs, invites, machineIdentities] = await Promise.all([
             canViewAuditLogs
               ? listAuditLogs(currentProject.id, accessToken!, {
                   limit: 6,
@@ -115,28 +124,38 @@ export default function OverviewPage() {
                   signal: controller.signal,
                 })
               : Promise.resolve([]),
+            canManageRuntimeTokens
+              ? listMachineIdentities(currentProject.id, accessToken!, {
+                  signal: controller.signal,
+                })
+              : Promise.resolve([]),
           ]);
 
           if (isActive) {
             setActivityLogs(logs);
             setPendingInviteCount(invites.length);
+            setMachineIdentityCount(machineIdentities.length);
             pageCache.set<OverviewCacheEntry>(overviewCacheKey, {
               activityLogs: logs,
               pendingInviteCount: invites.length,
+              machineIdentityCount: machineIdentities.length,
             });
           }
         } else if (isActive) {
           setActivityLogs([]);
           setPendingInviteCount(0);
+          setMachineIdentityCount(0);
           pageCache.set<OverviewCacheEntry>(overviewCacheKey, {
             activityLogs: [],
             pendingInviteCount: 0,
+            machineIdentityCount: 0,
           });
         }
       } catch {
         if (isActive) {
           setActivityLogs([]);
           setPendingInviteCount(0);
+          setMachineIdentityCount(0);
         }
       } finally {
         if (isActive) {
@@ -156,6 +175,7 @@ export default function OverviewPage() {
     apiConfigError,
     cachedOverview,
     canManageTeam,
+    canManageRuntimeTokens,
     canViewAuditLogs,
     currentProject.id,
     currentProject.role,
@@ -178,8 +198,8 @@ export default function OverviewPage() {
     },
     { label: 'Members', value: currentProject.member_count || 0, icon: Users, color: 'info' },
     {
-      label: 'Active Tokens',
-      value: currentProject.runtime_token_count || 0,
+      label: 'Machine Identities',
+      value: machineIdentityCount,
       icon: Ticket,
       color: 'warning',
     },
@@ -195,9 +215,9 @@ export default function OverviewPage() {
       },
       {
         id: 'ob2',
-        label: 'Create runtime token',
-        done: (currentProject.runtime_token_count || 0) > 0,
-        path: `${projectBasePath}/tokens`,
+        label: 'Create machine identity',
+        done: machineIdentityCount > 0,
+        path: `${projectBasePath}/machine-identities`,
       },
       {
         id: 'ob3',
@@ -209,7 +229,7 @@ export default function OverviewPage() {
     [
       currentProject.environment_count,
       currentProject.member_count,
-      currentProject.runtime_token_count,
+      machineIdentityCount,
       pendingInviteCount,
       projectBasePath,
     ]
@@ -232,17 +252,17 @@ export default function OverviewPage() {
           {canManageRuntimeTokens ? (
             <button
               className="btn btn-secondary"
-              onClick={() => navigate(`${projectBasePath}/tokens`)}
+              onClick={() => navigate(`${projectBasePath}/machine-identities`)}
               id="quick-create-token"
             >
               <Ticket size={14} />
-              Create Token
+              Create Identity
             </button>
           ) : (
-            <OwnerOnlyHint message="Only permitted managers can create runtime tokens.">
+            <OwnerOnlyHint message="Only permitted managers can create machine identities.">
               <button className="btn btn-secondary" id="quick-create-token" disabled>
                 <Ticket size={14} />
-                Create Token
+                Create Identity
               </button>
             </OwnerOnlyHint>
           )}
