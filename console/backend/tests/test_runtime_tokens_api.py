@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import Response
+from fastapi import HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials
+import pytest
 
 from app.api.deps import ProjectAccess
 from app.api.routes.runtime import fetch_runtime_secrets
@@ -13,9 +14,11 @@ from app.api.routes.runtime_tokens import (
     share_runtime_token,
 )
 from app.api.routes.secrets import push_secrets
+from app.models.runtime_token import RuntimeToken
 from app.schemas.runtime_token import RuntimeTokenCreateRequest
 from app.schemas.runtime_token_share import RuntimeTokenShareRequest
 from app.schemas.secret import SecretPushRequest
+from app.services.crypto import encrypt_text
 
 
 def _project_access(
@@ -62,10 +65,12 @@ def test_runtime_token_create_fetch_list_and_revoke(session_factory, seeder) -> 
         assert push_response.changed == 1
 
     with session_factory() as db:
+        http_response = Response()
         create_response = create_runtime_token(
             project_id=project.id,
             environment_id=environment.id,
             payload=RuntimeTokenCreateRequest(name="agent-prod"),
+            response=http_response,
             project_access=access,
             current_user=owner,
             db=db,
@@ -73,6 +78,8 @@ def test_runtime_token_create_fetch_list_and_revoke(session_factory, seeder) -> 
 
     assert create_response.name == "agent-prod"
     assert create_response.plaintext_token.startswith("envb_rt_")
+    assert create_response.is_revealable is False
+    assert http_response.headers["cache-control"] == "no-store"
 
     with session_factory() as db:
         list_response = list_runtime_tokens(
@@ -98,6 +105,22 @@ def test_runtime_token_create_fetch_list_and_revoke(session_factory, seeder) -> 
     stored_token = seeder.runtime_token(create_response.id)
     assert stored_token is not None
     assert stored_token.last_used_at is not None
+    assert stored_token.encrypted_token is None
+    assert stored_token.token_hash != create_response.plaintext_token
+
+    with session_factory() as db:
+        with pytest.raises(HTTPException) as reveal_error:
+            reveal_runtime_token(
+                token_id=create_response.id,
+                response=Response(),
+                current_user=owner,
+                db=db,
+            )
+        assert reveal_error.value.status_code == 409
+        assert reveal_error.value.detail == (
+            "This credential was displayed once and cannot be shared or revealed. "
+            "Create a separate token for each machine."
+        )
 
     with session_factory() as db:
         revoke_response = revoke_runtime_token(
@@ -119,8 +142,6 @@ def test_runtime_token_create_fetch_list_and_revoke(session_factory, seeder) -> 
                 db=db,
             )
         except Exception as exc:  # pragma: no branch
-            from fastapi import HTTPException
-
             assert isinstance(exc, HTTPException)
             assert exc.status_code == 401
             assert exc.detail == "Invalid runtime token."
@@ -145,14 +166,23 @@ def test_shared_member_can_list_and_reveal_shared_runtime_token(session_factory,
     member_access = _project_access(project, role="member")
 
     with session_factory() as db:
+        http_response = Response()
         create_response = create_runtime_token(
             project_id=project.id,
             environment_id=environment.id,
             payload=RuntimeTokenCreateRequest(name="shared-agent"),
+            response=http_response,
             project_access=owner_access,
             current_user=owner,
             db=db,
         )
+
+    # Simulate a token created before hash-only credentials were introduced.
+    with session_factory() as db:
+        legacy_token = db.get(RuntimeToken, create_response.id)
+        assert legacy_token is not None
+        legacy_token.encrypted_token = encrypt_text(create_response.plaintext_token)
+        db.commit()
 
     with session_factory() as db:
         share_response = share_runtime_token(
@@ -175,6 +205,7 @@ def test_shared_member_can_list_and_reveal_shared_runtime_token(session_factory,
         )
 
     assert [str(token.id) for token in member_list_response] == [str(create_response.id)]
+    assert member_list_response[0].is_revealable is True
 
     with session_factory() as db:
         reveal_response = reveal_runtime_token(
