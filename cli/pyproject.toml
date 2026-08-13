@@ -4,17 +4,30 @@ build-backend = "hatchling.build"
 
 [project]
 name = "envbasis-cli"
-version = "0.1.0"
-description = "Thin authenticated CLI client for the EnvBasis backend API."
+version = "0.2.0"
+description = "Securely inject, export, and scan application secrets with EnvBasis."
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [{ name = "EnvBasis" }]
+keywords = ["secrets", "security", "cli", "environment-variables", "devops"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Topic :: Software Development :: Build Tools",
+]
 dependencies = [
   "httpx>=0.28.1",
   "keyring>=25.6.0",
   "pydantic>=2.11.0",
   "python-dotenv>=1.1.0",
   "rich>=14.0.0",
-  "typer>=0.16.0",
+  "typer>=0.27.1,<0.28",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +35,15 @@ dev = [
   "pytest>=8.3.5",
   "respx>=0.22.0",
 ]
+standalone = [
+  "pyinstaller>=6.21.0,<7",
+]
+
+[project.urls]
+Homepage = "https://github.com/RahimMirani/envbasis"
+Repository = "https://github.com/RahimMirani/envbasis"
+Issues = "https://github.com/RahimMirani/envbasis/issues"
+Changelog = "https://github.com/RahimMirani/envbasis/blob/main/cli/CHANGELOG.md"
 
 [project.scripts]
 envbasis = "envbasis_cli.main:run"
