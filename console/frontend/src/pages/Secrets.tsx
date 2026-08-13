@@ -11,6 +11,10 @@ import {
   Download,
   Check,
   AlertTriangle,
+  Folder,
+  FolderPlus,
+  History,
+  RotateCcw,
 } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 import Checkbox from '../components/Checkbox';
@@ -29,13 +33,23 @@ import {
   pushSecrets,
   revealSecret,
   updateSecret,
+  listSecretFolders,
+  createSecretFolder,
+  listProjectSecretTags,
+  createProjectSecretTag,
+  listSecretImports,
+  createSecretImport,
+  deleteSecretImport,
+  listSecretVersions,
+  revealSecretVersion,
+  rollbackSecretVersion,
   ApiError,
 } from '../lib/api';
 import { parseDotenv, serializeDotenv } from '../lib/dotenv';
 import { formatDate, formatRelativeTime } from '../lib/format';
 import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getDefaultEnvironmentId } from '../lib/secrets';
-import type { Project, Environment, Secret, ProjectSecret } from '../types/api';
+import type { Project, Environment, Secret, ProjectSecret, SecretFolder, ProjectSecretTag, SecretImportRule, SecretVersionItem } from '../types/api';
 
 interface OutletContextType {
   currentEnv: string;
@@ -83,15 +97,18 @@ const SECRET_PAGE_SIZE = 100;
 const SECRET_CACHE_TTL_MS = 30_000;
 
 function buildSecretId(secret: SecretWithEnv): string {
-  return `${secret.environment_id}:${secret.key}`;
+  return `${secret.environment_id}:${secret.path}:${secret.key}`;
 }
 
 function buildSecretsQueryKey(
   projectId: string,
   environmentIds: string[],
-  key: string
+  key: string,
+  path = '/',
+  recursive = false,
+  tags: string[] = []
 ): string {
-  return `${projectId}::${environmentIds.join(',')}::${key}`;
+  return `${projectId}::${environmentIds.join(',')}::${key}::${path}::${recursive}::${tags.slice().sort().join(',')}`;
 }
 
 function mapProjectSecret(secret: ProjectSecret): SecretWithEnv {
@@ -192,6 +209,12 @@ export default function SecretsPage() {
   const initialSecretAccessState: 'enabled' | 'checking' | 'disabled' = 'enabled';
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [currentPath, setCurrentPath] = useState('/');
+  const [includeDescendants, setIncludeDescendants] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [folders, setFolders] = useState<SecretFolder[]>([]);
+  const [projectTags, setProjectTags] = useState<ProjectSecretTag[]>([]);
+  const [secretImports, setSecretImports] = useState<SecretImportRule[]>([]);
   const [secrets, setSecrets] = useState<SecretWithEnv[]>(() => initialSecretsEntry?.secrets ?? []);
   const [nextCursor, setNextCursor] = useState<string | null>(() => initialSecretsEntry?.nextCursor ?? null);
   const [isLoading, setIsLoading] = useState(() => !initialSecretsEntry);
@@ -209,6 +232,14 @@ export default function SecretsPage() {
   const [secretKey, setSecretKey] = useState('');
   const [secretValue, setSecretValue] = useState('');
   const [secretExpiresAt, setSecretExpiresAt] = useState('');
+  const [secretPath, setSecretPath] = useState('/');
+  const [secretTags, setSecretTags] = useState('');
+  const [secretDescription, setSecretDescription] = useState('');
+  const [secretOwner, setSecretOwner] = useState('');
+  const [secretService, setSecretService] = useState('');
+  const [secretRotationDays, setSecretRotationDays] = useState('');
+  const [secretRotateAt, setSecretRotateAt] = useState('');
+  const [secretMetadataJson, setSecretMetadataJson] = useState('{}');
   const [secretEnvironmentId, setSecretEnvironmentId] = useState('');
   const [uploadEnvironmentId, setUploadEnvironmentId] = useState('');
   const [uploadContent, setUploadContent] = useState('');
@@ -227,6 +258,10 @@ export default function SecretsPage() {
   const [selectedSecretIds, setSelectedSecretIds] = useState<string[]>([]);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [historySecret, setHistorySecret] = useState<SecretWithEnv | null>(null);
+  const [historyVersions, setHistoryVersions] = useState<SecretVersionItem[]>([]);
+  const [historicalValues, setHistoricalValues] = useState<Record<number, string>>({});
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const secretsCacheRef = useRef<Map<string, SecretsQueryCacheEntry>>(initialSecretsCache);
 
@@ -243,8 +278,15 @@ export default function SecretsPage() {
     [visibleEnvironments]
   );
   const secretsQueryKey = useMemo(
-    () => buildSecretsQueryKey(currentProject.id, visibleEnvironmentIds, appliedSearch),
-    [appliedSearch, currentProject.id, visibleEnvironmentIds]
+    () => buildSecretsQueryKey(
+      currentProject.id,
+      visibleEnvironmentIds,
+      appliedSearch,
+      currentPath,
+      includeDescendants,
+      selectedTags
+    ),
+    [appliedSearch, currentProject.id, currentPath, includeDescendants, selectedTags, visibleEnvironmentIds]
   );
   const isSearchPending = search.trim() !== appliedSearch;
 
@@ -264,7 +306,54 @@ export default function SecretsPage() {
 
   useEffect(() => {
     setSecretAccessState('enabled');
+    setCurrentPath('/');
+    setSelectedTags([]);
   }, [currentProject.id]);
+
+  useEffect(() => {
+    if (!accessToken || visibleEnvironments.length === 0) {
+      setFolders([]);
+      setProjectTags([]);
+      setSecretImports([]);
+      return undefined;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+    async function loadStructure() {
+      try {
+        const [folderResponses, tags, imports] = await Promise.all([
+          Promise.all(
+            visibleEnvironments.map((environment) =>
+              listSecretFolders(currentProject.id, environment.id, accessToken!, {
+                path: currentPath,
+                signal: controller.signal,
+              })
+            )
+          ),
+          listProjectSecretTags(currentProject.id, accessToken!, { signal: controller.signal }),
+          listSecretImports(currentProject.id, accessToken!, { signal: controller.signal }),
+        ]);
+        if (!active) return;
+        const byPath = new Map<string, SecretFolder>();
+        folderResponses.flatMap((response) => response.folders).forEach((folder) => {
+          if (!byPath.has(folder.path)) byPath.set(folder.path, folder);
+        });
+        setFolders([...byPath.values()].sort((left, right) => left.path.localeCompare(right.path)));
+        setProjectTags(tags);
+        setSecretImports(imports);
+      } catch (structureError) {
+        if (active && !isAbortError(structureError)) {
+          setError((structureError as Error).message || 'Failed to load folders and tags.');
+        }
+      }
+    }
+    void loadStructure();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [accessToken, currentPath, currentProject.id, visibleEnvironments]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -325,6 +414,9 @@ export default function SecretsPage() {
           key: appliedSearch || undefined,
           environmentIds: visibleEnvironmentIds,
           limit: SECRET_PAGE_SIZE,
+          path: currentPath,
+          recursive: includeDescendants,
+          tags: selectedTags,
         });
 
         if (!isActive) {
@@ -376,11 +468,14 @@ export default function SecretsPage() {
     apiConfigError,
     appliedSearch,
     currentProject.id,
+    currentPath,
+    includeDescendants,
     pageCache,
     secretAccessState,
     secrets.length,
     secretsPageCacheKey,
     secretsQueryKey,
+    selectedTags,
     visibleEnvironments.length,
     visibleEnvironmentIds,
   ]);
@@ -400,6 +495,16 @@ export default function SecretsPage() {
   const defaultEnvironmentId = getDefaultEnvironmentId(currentEnv, environments);
   const cliEnvironmentName =
     currentEnv === 'all' ? environments[0]?.name || 'dev' : currentEnv;
+  const pathBreadcrumbs = useMemo(() => {
+    const segments = currentPath.split('/').filter(Boolean);
+    return [
+      { label: 'Root', path: '/' },
+      ...segments.map((segment, index) => ({
+        label: segment,
+        path: `/${segments.slice(0, index + 1).join('/')}`,
+      })),
+    ];
+  }, [currentPath]);
 
   const syncVisibleSecretState = (nextSecrets: SecretWithEnv[]) => {
     const visibleVersions = new Map(
@@ -458,7 +563,8 @@ export default function SecretsPage() {
         currentProject.id,
         secret.environment_id,
         secret.key,
-        accessToken!
+        accessToken!,
+        { path: secret.path }
       );
       setRevealedValues((current) => ({
         ...current,
@@ -521,9 +627,141 @@ export default function SecretsPage() {
     setSecretKey('');
     setSecretValue('');
     setSecretExpiresAt('');
+    setSecretPath(currentPath);
+    setSecretTags(selectedTags.join(', '));
+    setSecretDescription('');
+    setSecretOwner('');
+    setSecretService('');
+    setSecretRotationDays('');
+    setSecretRotateAt('');
+    setSecretMetadataJson('{}');
     setSecretEnvironmentId(defaultEnvironmentId);
     setMutationError(null);
     setShowSecretModal(true);
+  };
+
+  const handleCreateFolder = async () => {
+    const environment = visibleEnvironments[0];
+    if (!environment || !accessToken) return;
+    const value = window.prompt('Folder name or absolute path');
+    if (!value?.trim()) return;
+    const path = value.trim().startsWith('/')
+      ? value.trim()
+      : `${currentPath === '/' ? '' : currentPath}/${value.trim()}`;
+    try {
+      const folder = await createSecretFolder(currentProject.id, environment.id, accessToken, { path });
+      setFolders((current) => [...current.filter((item) => item.path !== folder.path), folder]);
+    } catch (folderError) {
+      setError((folderError as Error).message || 'Failed to create folder.');
+    }
+  };
+
+  const handleCreateTag = async () => {
+    if (!accessToken) return;
+    const value = window.prompt('New project tag');
+    if (!value?.trim()) return;
+    try {
+      const tag = await createProjectSecretTag(currentProject.id, accessToken, { name: value.trim() });
+      setProjectTags((current) => [...current.filter((item) => item.id !== tag.id), tag]
+        .sort((left, right) => left.name.localeCompare(right.name)));
+    } catch (tagError) {
+      setError((tagError as Error).message || 'Failed to create tag.');
+    }
+  };
+
+  const handleCreateImport = async () => {
+    if (!accessToken || visibleEnvironments.length === 0) return;
+    const sourceName = window.prompt('Source environment name');
+    if (!sourceName?.trim()) return;
+    const source = environments.find((environment) => environment.name === sourceName.trim());
+    if (!source) {
+      setError(`Environment "${sourceName.trim()}" was not found.`);
+      return;
+    }
+    const sourcePath = window.prompt('Source path', '/') || '/';
+    const targetPath = window.prompt('Target path', currentPath) || currentPath;
+    try {
+      const rule = await createSecretImport(currentProject.id, accessToken, {
+        source_environment_id: source.id,
+        source_path: sourcePath,
+        target_environment_id: visibleEnvironments[0].id,
+        target_path: targetPath,
+        recursive: window.confirm('Include source subfolders recursively?'),
+        priority: 0,
+        enabled: true,
+      });
+      setSecretImports((current) => [...current, rule]);
+    } catch (importError) {
+      setError((importError as Error).message || 'Failed to create import.');
+    }
+  };
+
+  const handleDeleteImport = async (rule: SecretImportRule) => {
+    if (!accessToken || !window.confirm('Delete this secret import?')) return;
+    try {
+      await deleteSecretImport(currentProject.id, rule.id, accessToken);
+      setSecretImports((current) => current.filter((item) => item.id !== rule.id));
+    } catch (importError) {
+      setError((importError as Error).message || 'Failed to delete import.');
+    }
+  };
+
+  const openHistory = async (secret: SecretWithEnv) => {
+    setHistorySecret(secret);
+    setHistoryVersions([]);
+    setHistoricalValues({});
+    setIsHistoryLoading(true);
+    try {
+      const response = await listSecretVersions(
+        currentProject.id,
+        secret.environment_id,
+        secret.key,
+        accessToken!,
+        { path: secret.path }
+      );
+      setHistoryVersions(response.versions);
+    } catch (historyError) {
+      setError((historyError as Error).message || 'Failed to load secret history.');
+      setHistorySecret(null);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  const revealHistoricalValue = async (version: number) => {
+    if (!historySecret) return;
+    try {
+      const response = await revealSecretVersion(
+        currentProject.id,
+        historySecret.environment_id,
+        historySecret.key,
+        version,
+        accessToken!,
+        { path: historySecret.path }
+      );
+      setHistoricalValues((current) => ({ ...current, [version]: response.value }));
+    } catch (historyError) {
+      setError((historyError as Error).message || 'Failed to reveal historical value.');
+    }
+  };
+
+  const rollbackHistoricalValue = async (version: number) => {
+    if (!historySecret || !window.confirm(`Create a new version from v${version}?`)) return;
+    try {
+      await rollbackSecretVersion(
+        currentProject.id,
+        historySecret.environment_id,
+        historySecret.key,
+        version,
+        accessToken!,
+        { path: historySecret.path }
+      );
+      invalidateProjectSecretsCache();
+      await reloadSecrets();
+      setHistorySecret(null);
+    } catch (historyError) {
+      setError((historyError as Error).message || 'Failed to roll back secret version.');
+    }
   };
 
   const openUploadModal = () => {
@@ -550,6 +788,14 @@ export default function SecretsPage() {
       setSecretKey(secret.key);
       setSecretValue(value);
       setSecretExpiresAt(toLocalDateTimeInput(secret.expires_at));
+      setSecretPath(secret.path);
+      setSecretTags(secret.tags.join(', '));
+      setSecretDescription(secret.description || '');
+      setSecretOwner(secret.owner || '');
+      setSecretService(secret.service || '');
+      setSecretRotationDays(secret.rotation_interval_days ? String(secret.rotation_interval_days) : '');
+      setSecretRotateAt(toLocalDateTimeInput(secret.rotate_at));
+      setSecretMetadataJson(JSON.stringify(secret.custom_metadata || {}, null, 2));
       setSecretEnvironmentId(secret.environment_id);
       setMutationError(null);
       setShowSecretModal(true);
@@ -649,6 +895,9 @@ export default function SecretsPage() {
       key: appliedSearch || undefined,
       environmentIds: visibleEnvironmentIds,
       limit: SECRET_PAGE_SIZE,
+      path: currentPath,
+      recursive: includeDescendants,
+      tags: selectedTags,
     });
     const nextSecrets = response.secrets.map(mapProjectSecret);
 
@@ -676,6 +925,9 @@ export default function SecretsPage() {
         environmentIds: visibleEnvironmentIds,
         limit: SECRET_PAGE_SIZE,
         cursor: nextCursor,
+        path: currentPath,
+        recursive: includeDescendants,
+        tags: selectedTags,
       });
       const appendedSecrets = response.secrets.map(mapProjectSecret);
 
@@ -719,6 +971,21 @@ export default function SecretsPage() {
 
   const handleSaveSecret = async () => {
     const trimmedKey = secretKey.trim().toUpperCase();
+    const normalizedTags = [...new Set(
+      secretTags.split(',').map((tag) => tag.trim().toLowerCase()).filter(Boolean)
+    )];
+    let customMetadata: Record<string, string>;
+    try {
+      const parsed = JSON.parse(secretMetadataJson || '{}') as Record<string, unknown>;
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' ||
+          Object.values(parsed).some((value) => typeof value !== 'string')) {
+        throw new Error('Metadata must be a JSON object containing string values.');
+      }
+      customMetadata = parsed as Record<string, string>;
+    } catch (metadataError) {
+      setMutationError((metadataError as Error).message || 'Custom metadata is invalid JSON.');
+      return;
+    }
 
     if (!secretEnvironmentId) {
       setMutationError('Select an environment.');
@@ -739,16 +1006,38 @@ export default function SecretsPage() {
           key: trimmedKey,
           value: secretValue,
           expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
+          path: secretPath || '/',
+          tags: normalizedTags,
+          description: secretDescription.trim() || null,
+          owner: secretOwner.trim() || null,
+          service: secretService.trim() || null,
+          rotation_interval_days: secretRotationDays ? Number(secretRotationDays) : null,
+          rotate_at: toIsoFromLocalDateTimeInput(secretRotateAt),
+          custom_metadata: customMetadata,
         });
       } else {
-        await updateSecret(currentProject.id, secretEnvironmentId, trimmedKey, accessToken!, {
-          value: secretValue,
-          expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
-        });
+        await updateSecret(
+          currentProject.id,
+          secretEnvironmentId,
+          trimmedKey,
+          accessToken!,
+          {
+            value: secretValue,
+            expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
+            tags: normalizedTags,
+            description: secretDescription.trim() || null,
+            owner: secretOwner.trim() || null,
+            service: secretService.trim() || null,
+            rotation_interval_days: secretRotationDays ? Number(secretRotationDays) : null,
+            rotate_at: toIsoFromLocalDateTimeInput(secretRotateAt),
+            custom_metadata: customMetadata,
+          },
+          { path: secretPath }
+        );
       }
 
       if (modalMode === 'edit') {
-        clearSecretClientState(`${secretEnvironmentId}:${trimmedKey}`);
+        clearSecretClientState(`${secretEnvironmentId}:${secretPath}:${trimmedKey}`);
       }
       invalidateProjectSecretsCache();
       await reloadSecrets();
@@ -772,7 +1061,9 @@ export default function SecretsPage() {
     setError(null);
 
     try {
-      await deleteSecret(currentProject.id, secret.environment_id, secret.key, accessToken!);
+      await deleteSecret(currentProject.id, secret.environment_id, secret.key, accessToken!, {
+        path: secret.path,
+      });
       clearSecretClientState(secretId);
       invalidateProjectSecretsCache();
       await reloadSecrets();
@@ -803,6 +1094,7 @@ export default function SecretsPage() {
         items: selectedSecrets.map((secret) => ({
           environment_id: secret.environment_id,
           key: secret.key,
+          path: secret.path,
         })),
       });
       selectedSecrets.forEach((secret) => {
@@ -872,6 +1164,8 @@ export default function SecretsPage() {
     try {
       const response = await pushSecrets(currentProject.id, uploadEnvironmentId, accessToken!, {
         secrets: parsedSecrets,
+        path: currentPath,
+        tags: selectedTags,
       });
 
       const targetEnvironment = environments.find(
@@ -917,7 +1211,11 @@ export default function SecretsPage() {
     setExportError(null);
 
     try {
-      const response = await pullSecrets(currentProject.id, exportEnvironmentId, accessToken!);
+      const response = await pullSecrets(currentProject.id, exportEnvironmentId, accessToken!, {
+        path: currentPath,
+        recursive: includeDescendants,
+        tags: selectedTags,
+      });
       const targetEnvironment = environments.find(
         (environment) => environment.id === exportEnvironmentId
       );
@@ -1040,6 +1338,73 @@ export default function SecretsPage() {
         </div>
       )}
 
+      <div className="secrets-structure-bar">
+        <div className="secrets-breadcrumbs" aria-label="Secret folder path">
+          <Folder size={15} />
+          {pathBreadcrumbs.map((item) => (
+            <button
+              key={item.path}
+              type="button"
+              className={`btn btn-ghost btn-sm ${item.path === currentPath ? 'is-active' : ''}`}
+              onClick={() => setCurrentPath(item.path)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="secrets-structure-actions">
+          <label className="secrets-recursive-toggle">
+            <input
+              type="checkbox"
+              checked={includeDescendants}
+              onChange={(event) => setIncludeDescendants(event.target.checked)}
+            />
+            Include descendants
+          </label>
+          {canManageSecrets && (
+            <button className="btn btn-secondary btn-sm" onClick={() => void handleCreateFolder()}>
+              <FolderPlus size={14} /> New Folder
+            </button>
+          )}
+        </div>
+      </div>
+      {folders.length > 0 && (
+        <div className="secrets-folder-grid">
+          {folders.map((folder) => (
+            <button
+              key={folder.path}
+              className="secrets-folder-card"
+              onClick={() => setCurrentPath(folder.path)}
+            >
+              <Folder size={15} />
+              <span>{folder.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="secrets-tag-filter">
+        <span className="text-secondary text-sm">Tags:</span>
+        {projectTags.map((tag) => {
+          const selected = selectedTags.includes(tag.name);
+          return (
+            <button
+              key={tag.id}
+              className={`badge ${selected ? 'badge-purple' : ''}`}
+              onClick={() => setSelectedTags((current) =>
+                selected ? current.filter((name) => name !== tag.name) : [...current, tag.name]
+              )}
+            >
+              {tag.name}
+            </button>
+          );
+        })}
+        {canManageSecrets && (
+          <button className="btn btn-ghost btn-sm" onClick={() => void handleCreateTag()}>
+            <Plus size={13} /> Tag
+          </button>
+        )}
+      </div>
+
       {/* Search */}
       <div className="secrets-toolbar">
         <div className="secrets-search">
@@ -1137,6 +1502,13 @@ export default function SecretsPage() {
                       </td>
                       <td>
                         <code className="secret-key">{secret.key}</code>
+                        {secret.is_reference && <span className="badge badge-env">Reference</span>}
+                        <div className="secret-path-label">{secret.path}</div>
+                        {secret.tags.length > 0 && (
+                          <div className="secret-tag-list">
+                            {secret.tags.map((tag) => <span key={tag} className="badge">{tag}</span>)}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <span
@@ -1179,6 +1551,15 @@ export default function SecretsPage() {
                             ) : (
                               <Copy size={14} />
                             )}
+                          </button>
+                          <button
+                            className="btn btn-ghost btn-icon btn-sm"
+                            onClick={() => void openHistory(secret)}
+                            data-tooltip="Version history"
+                            aria-label="View version history"
+                            disabled={isBusy}
+                          >
+                            <History size={14} />
                           </button>
                           {canManageSecrets && (
                             <button
@@ -1228,6 +1609,44 @@ export default function SecretsPage() {
           )}
         </div>
       )}
+
+      <div className="card secrets-imports-card">
+        <div className="overview-section-header">
+          <div>
+            <h3>Secret Imports</h3>
+            <p className="text-secondary text-sm">Local secrets override imports; higher priority imports win.</p>
+          </div>
+          {canManageSecrets && (
+            <button className="btn btn-secondary btn-sm" onClick={() => void handleCreateImport()}>
+              <Plus size={14} /> Add Import
+            </button>
+          )}
+        </div>
+        {secretImports.length === 0 ? (
+          <p className="text-secondary text-sm">No imports configured.</p>
+        ) : (
+          <div className="secrets-import-list">
+            {secretImports.map((rule) => {
+              const source = environments.find((environment) => environment.id === rule.source_environment_id);
+              const target = environments.find((environment) => environment.id === rule.target_environment_id);
+              return (
+                <div key={rule.id} className="secrets-import-row">
+                  <span className="mono text-sm">{source?.name || rule.source_environment_id}:{rule.source_path}</span>
+                  <span className="text-secondary">→</span>
+                  <span className="mono text-sm">{target?.name || rule.target_environment_id}:{rule.target_path}</span>
+                  <span className="badge">priority {rule.priority}</span>
+                  {!rule.enabled && <span className="badge">disabled</span>}
+                  {canManageSecrets && (
+                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => void handleDeleteImport(rule)}>
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* CLI Hint */}
       {canManageSecrets && (
@@ -1436,6 +1855,63 @@ export default function SecretsPage() {
           />
         </div>
         <div className="form-group">
+          <label htmlFor="secret-path-input">Folder Path</label>
+          <input
+            id="secret-path-input"
+            className="input mono"
+            value={secretPath}
+            onChange={(event) => setSecretPath(event.target.value)}
+            disabled={modalMode === 'edit' || isSubmitting}
+            placeholder="/backend"
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="secret-tags-input">Tags</label>
+          <input
+            id="secret-tags-input"
+            className="input"
+            value={secretTags}
+            onChange={(event) => setSecretTags(event.target.value)}
+            disabled={isSubmitting}
+            placeholder="critical, database"
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="secret-description-input">Description</label>
+          <textarea
+            id="secret-description-input"
+            className="input"
+            value={secretDescription}
+            onChange={(event) => setSecretDescription(event.target.value)}
+            disabled={isSubmitting}
+            rows={2}
+          />
+        </div>
+        <div className="form-grid-2">
+          <div className="form-group">
+            <label htmlFor="secret-owner-input">Owner</label>
+            <input
+              id="secret-owner-input"
+              className="input"
+              value={secretOwner}
+              onChange={(event) => setSecretOwner(event.target.value)}
+              disabled={isSubmitting}
+              placeholder="platform@example.com"
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="secret-service-input">Service</label>
+            <input
+              id="secret-service-input"
+              className="input"
+              value={secretService}
+              onChange={(event) => setSecretService(event.target.value)}
+              disabled={isSubmitting}
+              placeholder="api"
+            />
+          </div>
+        </div>
+        <div className="form-group">
           <label htmlFor="secret-env-input">Environment</label>
           <select
             id="secret-env-input"
@@ -1463,6 +1939,43 @@ export default function SecretsPage() {
           />
           <p className="secrets-upload-hint">Leave blank for no expiration.</p>
         </div>
+        <div className="form-grid-2">
+          <div className="form-group">
+            <label htmlFor="secret-rotation-days-input">Rotation Interval (days)</label>
+            <input
+              id="secret-rotation-days-input"
+              className="input"
+              type="number"
+              min="1"
+              max="3650"
+              value={secretRotationDays}
+              onChange={(event) => setSecretRotationDays(event.target.value)}
+              disabled={isSubmitting}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="secret-rotate-at-input">Next Rotation</label>
+            <input
+              id="secret-rotate-at-input"
+              className="input"
+              type="datetime-local"
+              value={secretRotateAt}
+              onChange={(event) => setSecretRotateAt(event.target.value)}
+              disabled={isSubmitting}
+            />
+          </div>
+        </div>
+        <div className="form-group">
+          <label htmlFor="secret-metadata-input">Custom Metadata (JSON)</label>
+          <textarea
+            id="secret-metadata-input"
+            className="input mono"
+            value={secretMetadataJson}
+            onChange={(event) => setSecretMetadataJson(event.target.value)}
+            disabled={isSubmitting}
+            rows={3}
+          />
+        </div>
         {mutationError && (
           <p className="secrets-form-error" role="alert">
             {mutationError}
@@ -1472,6 +1985,53 @@ export default function SecretsPage() {
           <AlertTriangle size={14} />
           <span>Secret values are encrypted at rest and never exposed in logs.</span>
         </div>
+      </Modal>
+      <Modal
+        isOpen={Boolean(historySecret)}
+        onClose={() => setHistorySecret(null)}
+        title={historySecret ? `History: ${historySecret.key}` : 'Secret History'}
+      >
+        {historySecret && (
+          <p className="text-secondary text-sm mono">{historySecret.environment}:{historySecret.path}</p>
+        )}
+        {isHistoryLoading ? (
+          <SectionLoader label="Loading version history" />
+        ) : (
+          <div className="secret-history-list">
+            {historyVersions.map((version) => (
+              <div key={version.version} className="secret-history-row">
+                <div className="secret-history-meta">
+                  <strong>v{version.version}</strong>
+                  <span>{formatDate(version.updated_at)}</span>
+                  <span>{version.updated_by_email || 'Unknown user'}</span>
+                  {version.archived_at && <span className="badge">Archived</span>}
+                  {version.is_deleted && <span className="badge">Deleted</span>}
+                </div>
+                {historicalValues[version.version] !== undefined && (
+                  <code className="secret-history-value">{historicalValues[version.version]}</code>
+                )}
+                {!version.is_deleted && (
+                  <div className="secret-actions">
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void revealHistoricalValue(version.version)}
+                    >
+                      <Eye size={13} /> Reveal
+                    </button>
+                    {canManageSecrets && version.version !== historySecret?.version && (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => void rollbackHistoricalValue(version.version)}
+                      >
+                        <RotateCcw size={13} /> Roll Back
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Modal>
       <ConfirmDialog
         isOpen={Boolean(secretPendingDelete)}
