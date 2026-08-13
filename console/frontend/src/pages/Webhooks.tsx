@@ -8,6 +8,7 @@ import {
   Activity,
   Send,
   RefreshCw,
+  RotateCw,
 } from 'lucide-react';
 import { Navigate, useOutletContext } from 'react-router-dom';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -22,6 +23,7 @@ import {
   listWebhookEvents,
   listWebhookDeliveries,
   sendTestWebhook,
+  redeliverWebhookDelivery,
   isAbortError,
 } from '../lib/api';
 import { formatDate, formatRelativeTime } from '../lib/format';
@@ -65,7 +67,7 @@ function getDeliveryBadgeClass(status: string): string {
     return 'badge-success';
   }
 
-  if (status === 'http_error') {
+  if (status === 'queued' || status === 'retrying' || status === 'http_error') {
     return 'badge-warning';
   }
 
@@ -73,6 +75,14 @@ function getDeliveryBadgeClass(status: string): string {
 }
 
 function getDeliveryStatusLabel(delivery: WebhookDelivery): string {
+  if (delivery.status === 'queued') {
+    return 'Queued';
+  }
+
+  if (delivery.status === 'retrying') {
+    return 'Retrying';
+  }
+
   if (delivery.status === 'success') {
     return delivery.response_status ? `Delivered (${delivery.response_status})` : 'Delivered';
   }
@@ -81,7 +91,42 @@ function getDeliveryStatusLabel(delivery: WebhookDelivery): string {
     return delivery.response_status ? `HTTP ${delivery.response_status}` : 'HTTP error';
   }
 
-  return 'Network error';
+  if (delivery.status === 'network_error') {
+    return 'Network error';
+  }
+
+  if (delivery.status === 'blocked') {
+    return 'Blocked';
+  }
+
+  if (delivery.status === 'canceled') {
+    return 'Canceled';
+  }
+
+  return delivery.status.replace(/_/g, ' ');
+}
+
+function canRedeliver(delivery: WebhookDelivery): boolean {
+  return delivery.status !== 'queued' && delivery.status !== 'retrying';
+}
+
+function formatScheduledTime(value: string): string {
+  const delayMs = new Date(value).getTime() - Date.now();
+  if (delayMs <= 0) {
+    return 'due now';
+  }
+
+  const minutes = Math.ceil(delayMs / 60_000);
+  if (minutes < 60) {
+    return `in ${minutes}m`;
+  }
+
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) {
+    return `in ${hours}h`;
+  }
+
+  return new Date(value).toLocaleString();
 }
 
 export default function WebhooksPage() {
@@ -120,6 +165,7 @@ export default function WebhooksPage() {
     error: null,
   });
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
+  const [redeliveringDeliveryId, setRedeliveringDeliveryId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const loadWebhooksData = async (showSpinner = false, signal?: AbortSignal) => {
@@ -231,7 +277,7 @@ export default function WebhooksPage() {
   };
 
   const closeHistoryModal = () => {
-    if (testingWebhookId) {
+    if (testingWebhookId || redeliveringDeliveryId) {
       return;
     }
 
@@ -367,6 +413,42 @@ export default function WebhooksPage() {
       }
     } finally {
       setTestingWebhookId(null);
+    }
+  };
+
+  const handleRedeliver = async (delivery: WebhookDelivery) => {
+    const webhook = historyState.webhook;
+    if (!webhook) {
+      return;
+    }
+
+    setRedeliveringDeliveryId(delivery.id);
+    setHistoryState((current) => ({ ...current, error: null }));
+    try {
+      const redelivered = await redeliverWebhookDelivery(
+        currentProject.id,
+        webhook.id,
+        delivery.id,
+        accessToken!
+      );
+      setHistoryState((current) => ({
+        ...current,
+        deliveries: current.deliveries.map((item) =>
+          item.id === redelivered.id ? redelivered : item
+        ),
+      }));
+      setWebhooks((current) =>
+        current.map((item) =>
+          item.id === webhook.id ? { ...item, latest_delivery: redelivered } : item
+        )
+      );
+    } catch (redeliveryError) {
+      setHistoryState((current) => ({
+        ...current,
+        error: (redeliveryError as Error).message || 'Failed to requeue webhook delivery.',
+      }));
+    } finally {
+      setRedeliveringDeliveryId(null);
     }
   };
 
@@ -608,6 +690,7 @@ export default function WebhooksPage() {
         isOpen={Boolean(historyState.webhook)}
         onClose={closeHistoryModal}
         title={historyState.webhook ? `Activity: ${historyState.webhook.url}` : 'Webhook Activity'}
+        size="wide"
         footer={
           <>
             {historyState.webhook && (
@@ -618,13 +701,17 @@ export default function WebhooksPage() {
                     void handleSendTest(historyState.webhook);
                   }
                 }}
-                disabled={Boolean(testingWebhookId)}
+                disabled={Boolean(testingWebhookId || redeliveringDeliveryId)}
               >
                 <Send size={14} />
                 {testingWebhookId === historyState.webhook?.id ? 'Testing...' : 'Send Test'}
               </button>
             )}
-            <button className="btn btn-primary" onClick={closeHistoryModal} disabled={Boolean(testingWebhookId)}>
+            <button
+              className="btn btn-primary"
+              onClick={closeHistoryModal}
+              disabled={Boolean(testingWebhookId || redeliveringDeliveryId)}
+            >
               Done
             </button>
           </>
@@ -657,13 +744,63 @@ export default function WebhooksPage() {
                   <span className="webhook-delivery-time">
                     {formatRelativeTime(delivery.created_at)}
                   </span>
+                  {canRedeliver(delivery) ? (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void handleRedeliver(delivery)}
+                      disabled={Boolean(redeliveringDeliveryId || testingWebhookId)}
+                    >
+                      <RotateCw
+                        size={12}
+                        className={redeliveringDeliveryId === delivery.id ? 'icon-spin' : ''}
+                      />
+                      {redeliveringDeliveryId === delivery.id ? 'Requeuing...' : 'Redeliver'}
+                    </button>
+                  ) : null}
                 </div>
                 <div className="webhook-delivery-meta">
-                  <span className="mono">{delivery.event}</span>
+                  <span className="mono" title="Stable delivery ID">ID {delivery.id}</span>
+                  <span>{delivery.attempt_count}/{delivery.max_attempts} attempts</span>
                   <span>{formatDate(delivery.created_at)}</span>
                 </div>
+                {delivery.next_attempt_at ? (
+                  <div className="webhook-next-retry">
+                    Next attempt {formatScheduledTime(delivery.next_attempt_at)} ·{' '}
+                    {new Date(delivery.next_attempt_at).toLocaleString()}
+                  </div>
+                ) : null}
                 {delivery.error_message && (
                   <div className="webhook-delivery-error">{delivery.error_message}</div>
+                )}
+                {delivery.attempts.length ? (
+                  <details className="webhook-attempt-details">
+                    <summary>View {delivery.attempts.length} request attempt{delivery.attempts.length === 1 ? '' : 's'}</summary>
+                    <div className="webhook-attempt-list">
+                      {delivery.attempts.map((attempt) => (
+                        <div className="webhook-attempt-item" key={attempt.id}>
+                          <div className="webhook-attempt-header">
+                            <strong>Attempt {attempt.attempt_number}</strong>
+                            <span className={`badge ${getDeliveryBadgeClass(attempt.status)}`}>
+                              {attempt.response_status
+                                ? `${attempt.status.replace(/_/g, ' ')} (${attempt.response_status})`
+                                : attempt.status.replace(/_/g, ' ')}
+                            </span>
+                            <span>{new Date(attempt.started_at).toLocaleString()}</span>
+                          </div>
+                          {attempt.error_message ? (
+                            <div className="webhook-delivery-error">{attempt.error_message}</div>
+                          ) : null}
+                          {attempt.next_retry_at ? (
+                            <div className="webhook-next-retry">
+                              Retry scheduled for {new Date(attempt.next_retry_at).toLocaleString()}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ) : (
+                  <p className="webhook-awaiting-attempt">Waiting for the delivery worker.</p>
                 )}
               </div>
             ))}
