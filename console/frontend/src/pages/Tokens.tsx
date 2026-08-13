@@ -327,7 +327,7 @@ export default function TokensPage() {
         title: 'Token Created',
         plaintextToken: createdToken.plaintext_token || '',
         warning:
-          'Copy this token now. Owners and shared members can reveal active tokens later, but it is still sensitive.',
+          'Copy this token now. EnvBasis stores only its hash and cannot reveal it again.',
       });
     } catch (createErrorValue) {
       setCreateError(formatCreateError(createErrorValue as ApiError));
@@ -679,15 +679,17 @@ export default function TokensPage() {
                       </td>
                       <td>
                         <div className="token-actions">
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => handleRevealToken(token)}
-                            disabled={status !== 'active' || isBusy}
-                          >
-                            <Eye size={12} />
-                            Reveal
-                          </button>
-                          {canManageRuntimeTokens && (
+                          {token.is_revealable && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => handleRevealToken(token)}
+                              disabled={status !== 'active' || isBusy}
+                            >
+                              <Eye size={12} />
+                              Reveal legacy token
+                            </button>
+                          )}
+                          {canManageRuntimeTokens && token.is_revealable && (
                             <button
                               className="btn btn-ghost btn-sm"
                               onClick={() => openShareModal(token)}
@@ -793,8 +795,8 @@ export default function TokensPage() {
         <div className="token-permission-note">
           <span className="badge badge-info">Read-only</span>
           <span>
-            Owners create tokens. Shared members can reveal active tokens that were shared with
-            them.
+            Copy a new token when it is created. EnvBasis stores only its hash and cannot reveal
+            or share the credential afterward.
           </span>
         </div>
       </Modal>
