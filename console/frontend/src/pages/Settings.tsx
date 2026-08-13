@@ -196,8 +196,8 @@ export default function SettingsPage() {
             <div>
               <strong>Delete Project</strong>
               <p>
-                Permanently delete this project and all its secrets, tokens, and data. This action
-                cannot be undone.
+                Permanently delete this project and all its secrets, machine identities, and data.
+                This action cannot be undone.
               </p>
             </div>
             {canManageProject ? (
