@@ -26,6 +26,7 @@ class RuntimeTokenRead(BaseModel):
     created_by: uuid.UUID | None
     revoked_at: datetime | None
     last_used_at: datetime | None
+    is_revealable: bool = False
 
 
 class RuntimeTokenCreateResponse(RuntimeTokenRead):
