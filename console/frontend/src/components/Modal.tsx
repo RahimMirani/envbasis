@@ -9,6 +9,7 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  size?: 'default' | 'wide';
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -27,6 +28,7 @@ export default function Modal({
   children,
   footer,
   initialFocusRef,
+  size = 'default',
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -99,7 +101,7 @@ export default function Modal({
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal animate-in"
+        className={`modal${size === 'wide' ? ' modal-wide' : ''} animate-in`}
         ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
