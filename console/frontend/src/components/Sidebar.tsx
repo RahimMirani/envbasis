@@ -19,9 +19,9 @@ import {
   Settings,
   ScrollText,
   LogOut,
-  Webhook,
   Search,
   Star,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import OwnerOnlyHint from './OwnerOnlyHint';
@@ -43,6 +43,7 @@ interface SidebarProps {
   projectName: string;
   projectRole: 'owner' | 'member';
   canViewAuditLogs: boolean;
+  canManageMachineIdentities: boolean;
   projects: Project[];
   open?: boolean;
   onClose?: () => void;
@@ -64,6 +65,7 @@ export default function Sidebar({
   projectName,
   projectRole,
   canViewAuditLogs,
+  canManageMachineIdentities,
   projects,
   open = false,
   onClose,
@@ -82,9 +84,14 @@ export default function Sidebar({
     { to: `${basePath}/secrets`, icon: KeyRound, label: 'Secrets' },
     { to: `${basePath}/environments`, icon: GitBranch, label: 'Environments' },
     { to: `${basePath}/team`, icon: Users, label: 'Team' },
-    { to: `${basePath}/tokens`, icon: Ticket, label: 'Runtime Tokens' },
+    {
+      to: `${basePath}/machine-identities`,
+      icon: Ticket,
+      label: 'Machine Identities',
+      locked: !canManageMachineIdentities,
+    },
     { to: `${basePath}/audit`, icon: ScrollText, label: 'Audit Logs', locked: !canViewAuditLogs },
-    { to: `${basePath}/webhooks`, icon: Webhook, label: 'Webhooks', ownerOnly: true },
+    { to: `${basePath}/governance`, icon: ShieldCheck, label: 'Access & Approvals' },
     { to: `${basePath}/settings`, icon: Settings, label: 'Settings', ownerOnly: true },
   ];
 
