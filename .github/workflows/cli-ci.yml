@@ -1,0 +1,87 @@
+name: CLI CI
+
+on:
+  push:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-ci.yml"
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          cache-dependency-glob: "cli/pyproject.toml"
+      - run: uv sync --extra dev
+      - run: uv run pytest -q
+      - run: uv run envbasis --help
+      - run: uv run envbasis --version
+
+  distributions:
+    name: Build Python distributions
+    runs-on: ubuntu-latest
+    needs: test
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+      - run: uv build
+      - run: uv run --isolated --no-project --with ./dist/envbasis_cli-*.whl envbasis --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: envbasis-cli-python-distributions
+          path: cli/dist/*
+          if-no-files-found: error
+
+  standalone:
+    name: Standalone (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra standalone
+      - run: uv run pyinstaller --onefile --name envbasis --collect-submodules keyring.backends src/envbasis_cli/__main__.py
+      - name: Smoke test standalone (Unix)
+        if: runner.os != 'Windows'
+        run: ./dist/envbasis --version
+      - name: Smoke test standalone (Windows)
+        if: runner.os == 'Windows'
+        run: .\dist\envbasis.exe --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: envbasis-cli-${{ runner.os }}-${{ runner.arch }}
+          path: cli/dist/envbasis*
+          if-no-files-found: error
