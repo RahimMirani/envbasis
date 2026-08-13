@@ -43,16 +43,36 @@ class WebhookRead(BaseModel):
     latest_delivery: "WebhookDeliveryRead | None" = None
 
 
+class WebhookDeliveryAttemptRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    delivery_id: uuid.UUID
+    attempt_number: int
+    status: str
+    response_status: int | None
+    error_message: str | None
+    started_at: datetime
+    completed_at: datetime
+    next_retry_at: datetime | None
+
+
 class WebhookDeliveryRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     webhook_id: uuid.UUID
+    idempotency_key: str | None
     event: str
     delivery_type: str
     status: str
     response_status: int | None
     error_message: str | None
+    attempt_count: int
+    max_attempts: int
+    next_attempt_at: datetime | None
+    last_attempt_at: datetime | None
     triggered_by: uuid.UUID | None
     created_at: datetime
     completed_at: datetime | None
+    attempts: list[WebhookDeliveryAttemptRead] = Field(default_factory=list)
