@@ -24,9 +24,11 @@ export default function TopBar({
     secrets: 'Secrets',
     environments: 'Environments',
     team: 'Team',
-    tokens: 'Runtime Tokens',
+    'machine-identities': 'Machine Identities',
+    tokens: 'Machine Identities',
     audit: 'Audit Logs',
     settings: 'Settings',
+    governance: 'Access & Approvals',
   };
   const location = useLocation();
   const navigate = useNavigate();
