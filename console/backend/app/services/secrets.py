@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.models.environment import Environment
 from app.models.secret import Secret
-from app.services.crypto import decrypt_secret_value
+from app.services.project_encryption import decrypt_project_secret
+from app.services.secret_structure import normalize_secret_path, path_is_within
 
 MAX_SECRET_KEYS = 100
 MAX_SECRET_KEY_LENGTH = 128
@@ -45,7 +46,12 @@ def validate_single_secret(*, key: str, value: str) -> None:
     validate_secret_mapping({key: value})
 
 
-def build_secret_payload(secret_rows: Sequence[Secret]) -> tuple[dict[str, str], dict[str, int]]:
+def build_secret_payload(
+    db: Session,
+    *,
+    project_id: uuid.UUID,
+    secret_rows: Sequence[Secret],
+) -> tuple[dict[str, str], dict[str, int]]:
     if len(secret_rows) > MAX_SECRET_KEYS:
         raise ValueError(f"Stored secret set is too large. Maximum allowed keys is {MAX_SECRET_KEYS}.")
 
@@ -54,7 +60,12 @@ def build_secret_payload(secret_rows: Sequence[Secret]) -> tuple[dict[str, str],
     total_bytes = 0
 
     for row in secret_rows:
-        value = decrypt_secret_value(row.encrypted_value)
+        value = decrypt_project_secret(
+            db,
+            project_id=project_id,
+            encrypted_value=row.encrypted_value,
+            encryption_key_version=row.encryption_key_version,
+        )
         value_bytes = len(value.encode("utf-8"))
         if value_bytes > MAX_SECRET_VALUE_BYTES:
             raise ValueError(
@@ -79,14 +90,18 @@ def get_latest_secret_rows(
     environment_id: uuid.UUID,
     include_deleted: bool = False,
     key_filter: str | None = None,
+    path: str | None = None,
+    recursive: bool = False,
+    tags: Sequence[str] | None = None,
 ) -> list[Secret]:
     latest_versions = (
         select(
             Secret.key.label("key"),
+            Secret.path.label("path"),
             func.max(Secret.version).label("latest_version"),
         )
         .where(Secret.environment_id == environment_id)
-        .group_by(Secret.key)
+        .group_by(Secret.key, Secret.path)
         .subquery()
     )
 
@@ -95,18 +110,33 @@ def get_latest_secret_rows(
         .join(
             latest_versions,
             (Secret.key == latest_versions.c.key)
+            & (Secret.path == latest_versions.c.path)
             & (Secret.version == latest_versions.c.latest_version),
         )
         .where(Secret.environment_id == environment_id)
-        .order_by(Secret.key.asc())
+        .order_by(Secret.path.asc(), Secret.key.asc())
     )
     if not include_deleted:
         stmt = stmt.where(Secret.is_deleted.is_(False))
     if key_filter:
         stmt = stmt.where(Secret.key.ilike(f"%{key_filter}%"))
 
-    rows = db.execute(stmt).scalars().all()
-    return list(rows)
+    rows = list(db.execute(stmt).scalars().all())
+    if path is not None:
+        selected_path = normalize_secret_path(path)
+        rows = [
+            row
+            for row in rows
+            if (
+                path_is_within(row.path, selected_path)
+                if recursive
+                else row.path == selected_path
+            )
+        ]
+    if tags:
+        selected_tags = set(tags)
+        rows = [row for row in rows if selected_tags.issubset(set(row.tags or []))]
+    return rows
 
 
 def get_latest_project_secret_rows(
@@ -115,6 +145,9 @@ def get_latest_project_secret_rows(
     project_id: uuid.UUID,
     environment_ids: Sequence[uuid.UUID] | None = None,
     key_filter: str | None = None,
+    path: str | None = None,
+    recursive: bool = False,
+    tags: Sequence[str] | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[tuple[Secret, Environment]], str | None]:
@@ -122,6 +155,7 @@ def get_latest_project_secret_rows(
         select(
             Secret.environment_id.label("environment_id"),
             Secret.key.label("key"),
+            Secret.path.label("path"),
             func.max(Secret.version).label("latest_version"),
         )
         .join(Environment, Environment.id == Secret.environment_id)
@@ -131,7 +165,9 @@ def get_latest_project_secret_rows(
     if environment_ids:
         latest_versions = latest_versions.where(Secret.environment_id.in_(environment_ids))
 
-    latest_versions = latest_versions.group_by(Secret.environment_id, Secret.key).subquery()
+    latest_versions = latest_versions.group_by(
+        Secret.environment_id, Secret.path, Secret.key
+    ).subquery()
 
     stmt = (
         select(Secret, Environment)
@@ -139,13 +175,12 @@ def get_latest_project_secret_rows(
             latest_versions,
             (Secret.environment_id == latest_versions.c.environment_id)
             & (Secret.key == latest_versions.c.key)
+            & (Secret.path == latest_versions.c.path)
             & (Secret.version == latest_versions.c.latest_version),
         )
         .join(Environment, Environment.id == Secret.environment_id)
         .where(Environment.project_id == project_id, Secret.is_deleted.is_(False))
-        .order_by(Secret.key.asc(), Environment.name.asc(), Secret.environment_id.asc())
-        .offset(offset)
-        .limit(limit + 1)
+        .order_by(Secret.path.asc(), Secret.key.asc(), Environment.name.asc(), Secret.environment_id.asc())
     )
 
     if environment_ids:
@@ -154,6 +189,21 @@ def get_latest_project_secret_rows(
         stmt = stmt.where(Secret.key.ilike(f"%{key_filter}%"))
 
     rows = list(db.execute(stmt).all())
+    if path is not None:
+        selected_path = normalize_secret_path(path)
+        rows = [
+            row
+            for row in rows
+            if (
+                path_is_within(row[0].path, selected_path)
+                if recursive
+                else row[0].path == selected_path
+            )
+        ]
+    if tags:
+        selected_tags = set(tags)
+        rows = [row for row in rows if selected_tags.issubset(set(row[0].tags or []))]
+    rows = rows[offset : offset + limit + 1]
     has_more = len(rows) > limit
     visible_rows = rows[:limit]
     next_cursor = str(offset + limit) if has_more else None
@@ -169,11 +219,12 @@ def get_project_secret_stats(
         select(
             Secret.environment_id.label("environment_id"),
             Secret.key.label("key"),
+            Secret.path.label("path"),
             func.max(Secret.version).label("latest_version"),
         )
         .join(Environment, Environment.id == Secret.environment_id)
         .where(Environment.project_id == project_id)
-        .group_by(Secret.environment_id, Secret.key)
+        .group_by(Secret.environment_id, Secret.path, Secret.key)
         .subquery()
     )
 
@@ -187,6 +238,7 @@ def get_project_secret_stats(
             latest_versions,
             (Secret.environment_id == latest_versions.c.environment_id)
             & (Secret.key == latest_versions.c.key)
+            & (Secret.path == latest_versions.c.path)
             & (Secret.version == latest_versions.c.latest_version),
         )
         .where(Secret.is_deleted.is_(False))
@@ -203,6 +255,7 @@ def get_project_secret_stats(
             latest_versions,
             (Secret.environment_id == latest_versions.c.environment_id)
             & (Secret.key == latest_versions.c.key)
+            & (Secret.path == latest_versions.c.path)
             & (Secret.version == latest_versions.c.latest_version),
         )
         .group_by(Secret.environment_id)
