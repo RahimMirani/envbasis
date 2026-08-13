@@ -30,11 +30,13 @@ EnvBasis is built for the agent shape:
 |---|---|
 | [`console/`](./console) | The web dashboard (React + Vite) and the FastAPI backend that serves both the dashboard and the runtime API. |
 | [`cli/`](./cli) | The `envbasis` Python CLI — sign in, push/pull `.env` files, manage secrets, runtime tokens, and members from your terminal. |
+| [`proxy/`](./proxy) | A separately deployable OpenAI and GitHub credential proxy for agents using short-lived EnvBasis machine tokens. |
 
 Each subproject has its own README with setup instructions:
 
 - **Dashboard + backend setup:** [`console/README.md`](./console/README.md)
 - **CLI usage and commands:** [`cli/README.md`](./cli/README.md)
+- **Agent Proxy setup and supported operations:** [`proxy/README.md`](./proxy/README.md)
 
 ---
 
