@@ -1,5 +1,16 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, useOutletContext } from 'react-router-dom';
+import {
+  CheckCircle2,
+  ClipboardList,
+  History,
+  KeyRound,
+  RotateCcw,
+  Shield,
+  ShieldCheck,
+  UserCheck,
+  XCircle,
+} from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import SectionLoader from '../components/SectionLoader';
 import {
@@ -23,6 +34,7 @@ import {
   updateProject,
   simulatePermission,
 } from '../lib/api';
+import { formatRelativeTime } from '../lib/format';
 import type {
   AccessRole,
   AccessRoleAssignment,
@@ -45,10 +57,41 @@ interface OutletContextType {
   onProjectUpdated: (project: Project) => void;
 }
 
+type GovernanceTab = 'approvals' | 'roles' | 'policies' | 'retention';
+
 const inputNumber = (value: string): number | null => (value.trim() ? Number(value) : null);
 
+function envName(environments: Environment[], environmentId: string | null | undefined): string {
+  if (!environmentId) return 'All environments';
+  return environments.find((environment) => environment.id === environmentId)?.name ?? 'Environment';
+}
+
+function subjectLabel(
+  members: Member[],
+  machines: MachineIdentity[],
+  assignment: AccessRoleAssignment,
+): string {
+  if (assignment.user_id) {
+    return members.find((member) => member.user_id === assignment.user_id)?.email ?? 'User';
+  }
+  if (assignment.machine_identity_id) {
+    return (
+      machines.find((machine) => machine.id === assignment.machine_identity_id)?.name ?? 'Machine'
+    );
+  }
+  return 'Subject';
+}
+
+function approvalStatusBadge(status: string): string {
+  if (status === 'pending') return 'badge-warning';
+  if (status === 'approved' || status === 'applied') return 'badge-success';
+  if (status === 'rejected' || status === 'cancelled' || status === 'canceled') return 'badge-danger';
+  return 'badge-neutral';
+}
+
 export default function GovernancePage() {
-  const { currentProject, environments, canManageProject, onProjectUpdated } = useOutletContext<OutletContextType>();
+  const { currentProject, environments, canManageProject, onProjectUpdated } =
+    useOutletContext<OutletContextType>();
   const { accessToken } = useAuth();
   const [roles, setRoles] = useState<AccessRole[]>([]);
   const [assignments, setAssignments] = useState<AccessRoleAssignment[]>([]);
@@ -62,6 +105,7 @@ export default function GovernancePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<GovernanceTab>('approvals');
 
   const [roleName, setRoleName] = useState('');
   const [resource, setResource] = useState('secrets');
@@ -85,7 +129,9 @@ export default function GovernancePage() {
   const [recoveryPath, setRecoveryPath] = useState('/');
   const [recoveryResult, setRecoveryResult] = useState<RecoveryResult | null>(null);
   const [organizationName, setOrganizationName] = useState('');
-  const [selectedOrganization, setSelectedOrganization] = useState(currentProject.organization_id ?? '');
+  const [selectedOrganization, setSelectedOrganization] = useState(
+    currentProject.organization_id ?? '',
+  );
   const [simulationSubject, setSimulationSubject] = useState('');
   const [simulationResource, setSimulationResource] = useState('secrets');
   const [simulationAction, setSimulationAction] = useState('read');
@@ -95,7 +141,9 @@ export default function GovernancePage() {
   const [proposalEnvironment, setProposalEnvironment] = useState('');
   const [proposalPath, setProposalPath] = useState('/');
   const [proposalKey, setProposalKey] = useState('');
-  const [proposalOperation, setProposalOperation] = useState<'create' | 'update' | 'delete'>('create');
+  const [proposalOperation, setProposalOperation] = useState<'create' | 'update' | 'delete'>(
+    'create',
+  );
   const [proposalValue, setProposalValue] = useState('');
 
   const load = useCallback(async () => {
@@ -105,7 +153,16 @@ export default function GovernancePage() {
     try {
       const common = listApprovalRequests(currentProject.id, accessToken);
       if (canManageProject) {
-        const [nextRoles, nextAssignments, nextPolicies, nextRequests, nextMembers, nextMachines, nextRetention, nextOrganizations] = await Promise.all([
+        const [
+          nextRoles,
+          nextAssignments,
+          nextPolicies,
+          nextRequests,
+          nextMembers,
+          nextMachines,
+          nextRetention,
+          nextOrganizations,
+        ] = await Promise.all([
           listAccessRoles(currentProject.id, accessToken),
           listAccessAssignments(currentProject.id, accessToken),
           listApprovalPolicies(currentProject.id, accessToken),
@@ -133,14 +190,51 @@ export default function GovernancePage() {
     }
   }, [accessToken, canManageProject, currentProject.id]);
 
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => { setSelectedOrganization(currentProject.organization_id ?? ''); }, [currentProject.organization_id]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    setSelectedOrganization(currentProject.organization_id ?? '');
+  }, [currentProject.organization_id]);
+
+  useEffect(() => {
+    if (!canManageProject && activeTab !== 'approvals') {
+      setActiveTab('approvals');
+    }
+  }, [activeTab, canManageProject]);
+
+  const pendingCount = useMemo(
+    () => requests.filter((request) => request.status === 'pending').length,
+    [requests],
+  );
+
+  const tabs = useMemo(() => {
+    const base: Array<{ id: GovernanceTab; label: string; icon: typeof Shield; count?: number }> = [
+      { id: 'approvals', label: 'Approvals', icon: ClipboardList, count: pendingCount || undefined },
+    ];
+    if (!canManageProject) return base;
+    return [
+      ...base,
+      { id: 'roles', label: 'Roles', icon: UserCheck },
+      { id: 'policies', label: 'Policies', icon: ShieldCheck },
+      { id: 'retention', label: 'Retention', icon: History },
+    ];
+  }, [canManageProject, pendingCount]);
 
   const run = async (work: () => Promise<void>, success: string) => {
-    setBusy(true); setError(null); setMessage(null);
-    try { await work(); setMessage(success); await load(); }
-    catch (workError) { setError((workError as Error).message || 'Request failed.'); }
-    finally { setBusy(false); }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await work();
+      setMessage(success);
+      await load();
+    } catch (workError) {
+      setError((workError as Error).message || 'Request failed.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submitRole = (event: FormEvent) => {
@@ -148,8 +242,19 @@ export default function GovernancePage() {
     void run(async () => {
       await createAccessRole(currentProject.id, accessToken!, {
         name: roleName,
-        ...(roleScope === 'organization' && currentProject.organization_id ? { organization_id: currentProject.organization_id } : {}),
-        permissions: [{ resource, action, effect, environment_id: roleEnvironment || null, path: rolePath || null, recursive: true }],
+        ...(roleScope === 'organization' && currentProject.organization_id
+          ? { organization_id: currentProject.organization_id }
+          : {}),
+        permissions: [
+          {
+            resource,
+            action,
+            effect,
+            environment_id: roleEnvironment || null,
+            path: rolePath || null,
+            recursive: true,
+          },
+        ],
       });
       setRoleName('');
     }, 'Custom role created.');
@@ -161,8 +266,12 @@ export default function GovernancePage() {
     void run(async () => {
       await createAccessAssignment(currentProject.id, accessToken!, {
         role_id: assignmentRole,
-        ...(subjectType === 'machine' ? { machine_identity_id: subjectId } : { user_id: subjectId }),
+        ...(subjectType === 'machine'
+          ? { machine_identity_id: subjectId }
+          : { user_id: subjectId }),
       });
+      setAssignmentRole('');
+      setAssignmentSubject('');
     }, 'Role assigned.');
   };
 
@@ -177,18 +286,29 @@ export default function GovernancePage() {
         path: policyPath,
         recursive: true,
         actions: ['create', 'update', 'delete'],
-        steps: [{
-          name: 'Approval', min_approvals: 1,
-          approver_user_ids: approverType === 'user' ? [approverId] : [],
-          approver_role_ids: approverType === 'role' ? [approverId] : [],
-        }, ...(secondApprover ? [{
-          name: 'Final approval', min_approvals: 1,
-          approver_user_ids: secondType === 'user' ? [secondId] : [],
-          approver_role_ids: secondType === 'role' ? [secondId] : [],
-        }] : [])],
+        steps: [
+          {
+            name: 'Approval',
+            min_approvals: 1,
+            approver_user_ids: approverType === 'user' ? [approverId] : [],
+            approver_role_ids: approverType === 'role' ? [approverId] : [],
+          },
+          ...(secondApprover
+            ? [
+                {
+                  name: 'Final approval',
+                  min_approvals: 1,
+                  approver_user_ids: secondType === 'user' ? [secondId] : [],
+                  approver_role_ids: secondType === 'role' ? [secondId] : [],
+                },
+              ]
+            : []),
+        ],
         prevent_self_approval: true,
         enabled: true,
       });
+      setApprover('');
+      setSecondApprover('');
     }, 'Approval policy created.');
   };
 
@@ -206,9 +326,17 @@ export default function GovernancePage() {
   const recover = (apply: boolean) => {
     if (!recoveryEnvironment || !recoveryAt) return;
     void run(async () => {
-      const result = await recoverEnvironmentSecrets(currentProject.id, recoveryEnvironment, accessToken!, {
-        at: new Date(recoveryAt).toISOString(), path: recoveryPath, recursive: true, dry_run: !apply,
-      });
+      const result = await recoverEnvironmentSecrets(
+        currentProject.id,
+        recoveryEnvironment,
+        accessToken!,
+        {
+          at: new Date(recoveryAt).toISOString(),
+          path: recoveryPath,
+          recursive: true,
+          dry_run: !apply,
+        },
+      );
       setRecoveryResult(result);
     }, apply ? 'Recovery applied.' : 'Recovery preview complete.');
   };
@@ -224,7 +352,8 @@ export default function GovernancePage() {
         ...(proposalOperation === 'delete' ? {} : { value: proposalValue }),
         comment: approvalComment || undefined,
       });
-      setProposalKey(''); setProposalValue('');
+      setProposalKey('');
+      setProposalValue('');
     }, 'Change submitted for approval.');
   };
 
@@ -232,7 +361,9 @@ export default function GovernancePage() {
     const [subjectType, subjectId] = simulationSubject.split(':');
     void run(async () => {
       const result = await simulatePermission(currentProject.id, accessToken!, {
-        ...(subjectType === 'machine' ? { machine_identity_id: subjectId } : { user_id: subjectId }),
+        ...(subjectType === 'machine'
+          ? { machine_identity_id: subjectId }
+          : { user_id: subjectId }),
         resource: simulationResource,
         action: simulationAction,
         environment_id: simulationEnvironment || null,
@@ -244,103 +375,985 @@ export default function GovernancePage() {
 
   const saveOrganization = () => {
     void run(async () => {
-      const updated = await updateProject(currentProject.id, accessToken!, { organization_id: selectedOrganization || null });
+      const updated = await updateProject(currentProject.id, accessToken!, {
+        organization_id: selectedOrganization || null,
+      });
       onProjectUpdated(updated);
     }, 'Project organization updated.');
   };
 
   if (!accessToken) return <Navigate to="/login" replace />;
-  if (isLoading) return <SectionLoader label="Loading governance" />;
+  if (isLoading) return <SectionLoader label="Loading access & approvals" />;
 
   return (
-    <div className="settings-page animate-in">
-      <div className="page-header"><div><h1 className="page-heading">Access & approvals</h1><p className="page-subtitle">Scoped roles, protected changes, retention and recovery.</p></div></div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {message && <div className="alert alert-success">{message}</div>}
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">Submit a protected change</h3>
-        <div className="card settings-card">
-          <form className="governance-form" onSubmit={submitProposal}>
-            <select className="input" required value={proposalEnvironment} onChange={(event) => setProposalEnvironment(event.target.value)}><option value="">Environment</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select>
-            <input className="input" required value={proposalPath} onChange={(event) => setProposalPath(event.target.value)} placeholder="/path" />
-            <input className="input" required value={proposalKey} onChange={(event) => setProposalKey(event.target.value)} placeholder="SECRET_KEY" />
-            <select className="input" value={proposalOperation} onChange={(event) => setProposalOperation(event.target.value as 'create' | 'update' | 'delete')}><option value="create">Create</option><option value="update">Update</option><option value="delete">Delete</option></select>
-            {proposalOperation !== 'delete' && <input className="input" required type="password" autoComplete="off" value={proposalValue} onChange={(event) => setProposalValue(event.target.value)} placeholder="Secret value" />}
-            <button className="btn btn-primary" disabled={busy}>Submit proposal</button>
-          </form>
+    <div className="governance-page animate-in">
+      <div className="page-header">
+        <div>
+          <h1 className="page-heading">Access & Approvals</h1>
+          <p className="page-subtitle">
+            Review protected secret changes, manage scoped roles, and recover historical values.
+          </p>
         </div>
       </div>
 
-      <div className="settings-section">
-        <h3 className="settings-section-title">Approval inbox</h3>
-        <div className="card settings-card">
-          {requests.length === 0 ? <p className="text-muted">No approval requests.</p> : requests.map((request) => (
-            <div className="governance-row" key={request.id}>
-              <div><strong>{request.operation.toUpperCase()} {request.secret_key}</strong><div className="text-muted">{request.path} · {request.status} · step {Math.min(request.current_step + 1, request.total_steps)}/{request.total_steps}</div></div>
-              <div className="governance-actions">
-                <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void run(async () => { await actOnApprovalRequest(currentProject.id, request.id, accessToken, { action: 'comment', comment: approvalComment || 'Reviewed' }); }, 'Comment added.')}>Comment</button>
-                {request.status === 'pending' && <><button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void run(async () => { await actOnApprovalRequest(currentProject.id, request.id, accessToken, { action: 'cancel', comment: approvalComment || undefined }); }, 'Request cancelled.')}>Cancel</button><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void run(async () => { await actOnApprovalRequest(currentProject.id, request.id, accessToken, { action: 'reject', comment: approvalComment || undefined }); }, 'Request rejected.')}>Reject</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={() => void run(async () => { await actOnApprovalRequest(currentProject.id, request.id, accessToken, { action: 'approve', comment: approvalComment || undefined }); }, 'Approval recorded.')}>Approve</button></>}
+      {error ? (
+        <div className="auth-status auth-status-error" role="alert">
+          <span>{error}</span>
+        </div>
+      ) : null}
+      {message ? (
+        <div className="auth-status auth-status-success" role="status">
+          <span>{message}</span>
+        </div>
+      ) : null}
+
+      <div className="governance-tabs" role="tablist" aria-label="Access and approvals sections">
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              className={`governance-tab ${selected ? 'governance-tab-active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <Icon size={14} />
+              <span>{tab.label}</span>
+              {tab.count ? <span className="governance-tab-count">{tab.count}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === 'approvals' ? (
+        <div className="governance-panels">
+          <section className="settings-section">
+            <h3 className="settings-section-title">Submit a protected change</h3>
+            <div className="card settings-card">
+              <p className="settings-note">
+                Propose a create, update, or delete that must pass an approval policy before it is
+                applied.
+              </p>
+              <form className="governance-form-stack" onSubmit={submitProposal}>
+                <div className="governance-form-grid">
+                  <div className="form-group">
+                    <label htmlFor="proposal-environment">Environment</label>
+                    <select
+                      id="proposal-environment"
+                      className="input select"
+                      required
+                      value={proposalEnvironment}
+                      onChange={(event) => setProposalEnvironment(event.target.value)}
+                    >
+                      <option value="">Select environment</option>
+                      {environments.map((environment) => (
+                        <option key={environment.id} value={environment.id}>
+                          {environment.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="proposal-path">Path</label>
+                    <input
+                      id="proposal-path"
+                      className="input"
+                      required
+                      value={proposalPath}
+                      onChange={(event) => setProposalPath(event.target.value)}
+                      placeholder="/"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="proposal-key">Secret key</label>
+                    <input
+                      id="proposal-key"
+                      className="input"
+                      required
+                      value={proposalKey}
+                      onChange={(event) => setProposalKey(event.target.value)}
+                      placeholder="SECRET_KEY"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="proposal-operation">Operation</label>
+                    <select
+                      id="proposal-operation"
+                      className="input select"
+                      value={proposalOperation}
+                      onChange={(event) =>
+                        setProposalOperation(event.target.value as 'create' | 'update' | 'delete')
+                      }
+                    >
+                      <option value="create">Create</option>
+                      <option value="update">Update</option>
+                      <option value="delete">Delete</option>
+                    </select>
+                  </div>
+                </div>
+                {proposalOperation !== 'delete' ? (
+                  <div className="form-group">
+                    <label htmlFor="proposal-value">Secret value</label>
+                    <input
+                      id="proposal-value"
+                      className="input"
+                      required
+                      type="password"
+                      autoComplete="off"
+                      value={proposalValue}
+                      onChange={(event) => setProposalValue(event.target.value)}
+                      placeholder="Value to apply after approval"
+                    />
+                  </div>
+                ) : null}
+                <div className="form-group">
+                  <label htmlFor="proposal-comment">Comment</label>
+                  <input
+                    id="proposal-comment"
+                    className="input"
+                    value={approvalComment}
+                    onChange={(event) => setApprovalComment(event.target.value)}
+                    placeholder="Optional note for reviewers"
+                  />
+                </div>
+                <div className="governance-form-actions">
+                  <button className="btn btn-primary" disabled={busy}>
+                    Submit proposal
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3 className="settings-section-title">
+              Approval inbox
+              {pendingCount > 0 ? (
+                <span className="badge badge-warning">{pendingCount} pending</span>
+              ) : null}
+            </h3>
+            <div className="card settings-card">
+              {requests.length === 0 ? (
+                <div className="governance-empty">
+                  <ClipboardList size={28} />
+                  <h3>No approval requests</h3>
+                  <p>Protected changes will show up here for review.</p>
+                </div>
+              ) : (
+                <div className="governance-request-list">
+                  {requests.map((request) => (
+                    <div className="governance-request" key={request.id}>
+                      <div className="governance-request-main">
+                        <div className="governance-request-title-row">
+                          <strong>
+                            {request.operation.toUpperCase()} {request.secret_key}
+                          </strong>
+                          <span className={`badge ${approvalStatusBadge(request.status)}`}>
+                            {request.status}
+                          </span>
+                        </div>
+                        <div className="governance-request-meta">
+                          <span>{envName(environments, request.environment_id)}</span>
+                          <span>{request.path}</span>
+                          <span>
+                            Step {Math.min(request.current_step + 1, request.total_steps)}/
+                            {request.total_steps}
+                          </span>
+                          <span>{formatRelativeTime(request.created_at)}</span>
+                        </div>
+                      </div>
+                      <div className="governance-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={busy}
+                          onClick={() =>
+                            void run(async () => {
+                              await actOnApprovalRequest(currentProject.id, request.id, accessToken, {
+                                action: 'comment',
+                                comment: approvalComment || 'Reviewed',
+                              });
+                            }, 'Comment added.')
+                          }
+                        >
+                          Comment
+                        </button>
+                        {request.status === 'pending' ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void run(async () => {
+                                  await actOnApprovalRequest(
+                                    currentProject.id,
+                                    request.id,
+                                    accessToken,
+                                    { action: 'cancel', comment: approvalComment || undefined },
+                                  );
+                                }, 'Request cancelled.')
+                              }
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void run(async () => {
+                                  await actOnApprovalRequest(
+                                    currentProject.id,
+                                    request.id,
+                                    accessToken,
+                                    { action: 'reject', comment: approvalComment || undefined },
+                                  );
+                                }, 'Request rejected.')
+                              }
+                            >
+                              <XCircle size={13} />
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void run(async () => {
+                                  await actOnApprovalRequest(
+                                    currentProject.id,
+                                    request.id,
+                                    accessToken,
+                                    { action: 'approve', comment: approvalComment || undefined },
+                                  );
+                                }, 'Approval recorded.')
+                              }
+                            >
+                              <CheckCircle2 size={13} />
+                              Approve
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {canManageProject && activeTab === 'roles' ? (
+        <div className="governance-panels">
+          <section className="settings-section">
+            <h3 className="settings-section-title">Organization scope</h3>
+            <div className="card settings-card">
+              <p className="settings-note">
+                Organization roles apply to every attached project. Only the organization owner can
+                assign them.
+              </p>
+              <div className="governance-form-grid">
+                <div className="form-group">
+                  <label htmlFor="organization-name">Create organization</label>
+                  <div className="governance-inline-field">
+                    <input
+                      id="organization-name"
+                      className="input"
+                      value={organizationName}
+                      onChange={(event) => setOrganizationName(event.target.value)}
+                      placeholder="Organization name"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={busy || !organizationName.trim()}
+                      onClick={() =>
+                        void run(async () => {
+                          const organization = await createOrganization(accessToken, {
+                            name: organizationName,
+                          });
+                          setOrganizations((items) => [...items, organization]);
+                          setSelectedOrganization(organization.id);
+                          setOrganizationName('');
+                        }, 'Organization created. Attach it to enable organization roles.')
+                      }
+                    >
+                      Create
+                    </button>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="organization-select">Attach to project</label>
+                  <div className="governance-inline-field">
+                    <select
+                      id="organization-select"
+                      className="input select"
+                      value={selectedOrganization}
+                      onChange={(event) => setSelectedOrganization(event.target.value)}
+                    >
+                      <option value="">No organization</option>
+                      {organizations.map((organization) => (
+                        <option key={organization.id} value={organization.id}>
+                          {organization.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy}
+                      onClick={saveOrganization}
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-          ))}
-          <input className="input" value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} placeholder="Optional action comment" />
+          </section>
+
+          <section className="settings-section">
+            <h3 className="settings-section-title">Create a role</h3>
+            <div className="card settings-card">
+              <form className="governance-form-stack" onSubmit={submitRole}>
+                <div className="governance-form-grid">
+                  <div className="form-group">
+                    <label htmlFor="role-name">Role name</label>
+                    <input
+                      id="role-name"
+                      className="input"
+                      required
+                      value={roleName}
+                      onChange={(event) => setRoleName(event.target.value)}
+                      placeholder="Secrets reader"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="role-scope">Scope</label>
+                    <select
+                      id="role-scope"
+                      className="input select"
+                      value={roleScope}
+                      onChange={(event) =>
+                        setRoleScope(event.target.value as 'project' | 'organization')
+                      }
+                    >
+                      <option value="project">Project role</option>
+                      {currentProject.organization_id ? (
+                        <option value="organization">Organization role</option>
+                      ) : null}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="role-resource">Resource</label>
+                    <select
+                      id="role-resource"
+                      className="input select"
+                      value={resource}
+                      onChange={(event) => setResource(event.target.value)}
+                    >
+                      <option value="secrets">Secrets</option>
+                      <option value="folders">Folders</option>
+                      <option value="tags">Tags</option>
+                      <option value="imports">Imports</option>
+                      <option value="*">All resources</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="role-action">Action</label>
+                    <select
+                      id="role-action"
+                      className="input select"
+                      value={action}
+                      onChange={(event) => setAction(event.target.value)}
+                    >
+                      <option value="list">List</option>
+                      <option value="read">Read / reveal</option>
+                      <option value="write">Write</option>
+                      <option value="*">All actions</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="role-effect">Effect</label>
+                    <select
+                      id="role-effect"
+                      className="input select"
+                      value={effect}
+                      onChange={(event) => setEffect(event.target.value as 'allow' | 'deny')}
+                    >
+                      <option value="allow">Allow</option>
+                      <option value="deny">Deny</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="role-environment">Environment</label>
+                    <select
+                      id="role-environment"
+                      className="input select"
+                      value={roleEnvironment}
+                      onChange={(event) => setRoleEnvironment(event.target.value)}
+                    >
+                      <option value="">All environments</option>
+                      {environments.map((environment) => (
+                        <option key={environment.id} value={environment.id}>
+                          {environment.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="role-path">Path</label>
+                    <input
+                      id="role-path"
+                      className="input"
+                      value={rolePath}
+                      onChange={(event) => setRolePath(event.target.value)}
+                      placeholder="/"
+                    />
+                  </div>
+                </div>
+                <div className="governance-form-actions">
+                  <button className="btn btn-primary" disabled={busy}>
+                    Create role
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3 className="settings-section-title">Roles</h3>
+            <div className="card settings-card">
+              {roles.length === 0 ? (
+                <div className="governance-empty">
+                  <Shield size={28} />
+                  <h3>No roles yet</h3>
+                  <p>Create a custom role to grant scoped secret access.</p>
+                </div>
+              ) : (
+                <div className="governance-list">
+                  {roles.map((role) => (
+                    <div className="governance-row" key={role.id}>
+                      <div>
+                        <div className="governance-row-title">
+                          <strong>{role.name}</strong>
+                          {role.is_builtin ? <span className="badge badge-neutral">built-in</span> : null}
+                          {role.organization_id ? (
+                            <span className="badge badge-info">organization</span>
+                          ) : (
+                            <span className="badge badge-neutral">project</span>
+                          )}
+                        </div>
+                        <div className="text-muted">
+                          {role.permissions
+                            .map(
+                              (permission) =>
+                                `${permission.effect} ${permission.resource}:${permission.action}${
+                                  permission.path ? ` at ${permission.path}` : ''
+                                }`,
+                            )
+                            .join(' · ')}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3 className="settings-section-title">Assignments</h3>
+            <div className="card settings-card">
+              <form className="governance-form-stack" onSubmit={submitAssignment}>
+                <div className="governance-form-grid">
+                  <div className="form-group">
+                    <label htmlFor="assignment-role">Role</label>
+                    <select
+                      id="assignment-role"
+                      className="input select"
+                      required
+                      value={assignmentRole}
+                      onChange={(event) => setAssignmentRole(event.target.value)}
+                    >
+                      <option value="">Select role</option>
+                      {roles.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="assignment-subject">Member or machine</label>
+                    <select
+                      id="assignment-subject"
+                      className="input select"
+                      required
+                      value={assignmentSubject}
+                      onChange={(event) => setAssignmentSubject(event.target.value)}
+                    >
+                      <option value="">Select subject</option>
+                      {members.map((member) => (
+                        <option key={member.user_id} value={`user:${member.user_id}`}>
+                          {member.email}
+                        </option>
+                      ))}
+                      {machines.map((machine) => (
+                        <option key={machine.id} value={`machine:${machine.id}`}>
+                          Machine: {machine.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="governance-form-actions">
+                  <button className="btn btn-secondary" disabled={busy}>
+                    Assign role
+                  </button>
+                </div>
+              </form>
+
+              {assignments.length === 0 ? (
+                <p className="text-muted governance-list-empty">No role assignments yet.</p>
+              ) : (
+                <div className="governance-list">
+                  {assignments.map((assignment) => (
+                    <div className="governance-row" key={assignment.id}>
+                      <div>
+                        <strong>
+                          {roles.find((role) => role.id === assignment.role_id)?.name ?? 'Role'}
+                        </strong>
+                        <div className="text-muted">
+                          {subjectLabel(members, machines, assignment)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(async () => {
+                            await deleteAccessAssignment(
+                              currentProject.id,
+                              assignment.id,
+                              accessToken,
+                            );
+                          }, 'Assignment removed.')
+                        }
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3 className="settings-section-title">Permission simulator</h3>
+            <div className="card settings-card">
+              <p className="settings-note">
+                Check whether a member or machine identity is allowed to perform an action.
+              </p>
+              <div className="governance-form-grid">
+                <div className="form-group">
+                  <label htmlFor="simulation-subject">Subject</label>
+                  <select
+                    id="simulation-subject"
+                    className="input select"
+                    value={simulationSubject}
+                    onChange={(event) => setSimulationSubject(event.target.value)}
+                  >
+                    <option value="">Select subject</option>
+                    {members.map((member) => (
+                      <option key={member.user_id} value={`user:${member.user_id}`}>
+                        {member.email}
+                      </option>
+                    ))}
+                    {machines.map((machine) => (
+                      <option key={machine.id} value={`machine:${machine.id}`}>
+                        Machine: {machine.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="simulation-resource">Resource</label>
+                  <select
+                    id="simulation-resource"
+                    className="input select"
+                    value={simulationResource}
+                    onChange={(event) => setSimulationResource(event.target.value)}
+                  >
+                    <option value="secrets">Secrets</option>
+                    <option value="folders">Folders</option>
+                    <option value="tags">Tags</option>
+                    <option value="imports">Imports</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="simulation-action">Action</label>
+                  <select
+                    id="simulation-action"
+                    className="input select"
+                    value={simulationAction}
+                    onChange={(event) => setSimulationAction(event.target.value)}
+                  >
+                    <option value="list">List</option>
+                    <option value="read">Read</option>
+                    <option value="write">Write</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="simulation-environment">Environment</label>
+                  <select
+                    id="simulation-environment"
+                    className="input select"
+                    value={simulationEnvironment}
+                    onChange={(event) => setSimulationEnvironment(event.target.value)}
+                  >
+                    <option value="">All environments</option>
+                    {environments.map((environment) => (
+                      <option key={environment.id} value={environment.id}>
+                        {environment.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="simulation-path">Path</label>
+                  <input
+                    id="simulation-path"
+                    className="input"
+                    value={simulationPath}
+                    onChange={(event) => setSimulationPath(event.target.value)}
+                    placeholder="/"
+                  />
+                </div>
+              </div>
+              <div className="governance-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy || !simulationSubject}
+                  onClick={runSimulation}
+                >
+                  <KeyRound size={14} />
+                  Simulate access
+                </button>
+              </div>
+              {simulationResult ? (
+                <div
+                  className={`auth-status ${
+                    simulationResult.allowed ? 'auth-status-success' : 'auth-status-error'
+                  }`}
+                  role="status"
+                >
+                  <span>
+                    {simulationResult.allowed ? 'Allowed' : 'Denied'}: {simulationResult.reason}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          </section>
         </div>
-      </div>
+      ) : null}
 
-      {canManageProject && <>
-        <div className="settings-section"><h3 className="settings-section-title">Organization scope</h3><div className="card settings-card">
-          <div className="governance-form"><input className="input" value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="New organization name" /><button className="btn btn-secondary" disabled={busy || !organizationName.trim()} onClick={() => void run(async () => { const organization = await createOrganization(accessToken, { name: organizationName }); setOrganizations((items) => [...items, organization]); setSelectedOrganization(organization.id); setOrganizationName(''); }, 'Organization created. Attach it to enable organization roles.')}>Create organization</button><select className="input" value={selectedOrganization} onChange={(event) => setSelectedOrganization(event.target.value)}><option value="">No organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select><button className="btn btn-primary" disabled={busy} onClick={saveOrganization}>Save scope</button></div>
-          <p className="text-muted">Organization roles apply to every attached project. Only the organization owner can assign them.</p>
-        </div></div>
+      {canManageProject && activeTab === 'policies' ? (
+        <div className="governance-panels">
+          <section className="settings-section">
+            <h3 className="settings-section-title">Create approval policy</h3>
+            <div className="card settings-card">
+              <p className="settings-note">
+                Require one or two approval steps before create, update, or delete operations can be
+                applied.
+              </p>
+              <form className="governance-form-stack" onSubmit={submitPolicy}>
+                <div className="governance-form-grid">
+                  <div className="form-group">
+                    <label htmlFor="policy-name">Policy name</label>
+                    <input
+                      id="policy-name"
+                      className="input"
+                      required
+                      value={policyName}
+                      onChange={(event) => setPolicyName(event.target.value)}
+                      placeholder="Production changes"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="policy-environment">Environment</label>
+                    <select
+                      id="policy-environment"
+                      className="input select"
+                      value={policyEnvironment}
+                      onChange={(event) => setPolicyEnvironment(event.target.value)}
+                    >
+                      <option value="">All environments</option>
+                      {environments.map((environment) => (
+                        <option key={environment.id} value={environment.id}>
+                          {environment.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="policy-path">Path</label>
+                    <input
+                      id="policy-path"
+                      className="input"
+                      value={policyPath}
+                      onChange={(event) => setPolicyPath(event.target.value)}
+                      placeholder="/"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="policy-approver">First approver</label>
+                    <select
+                      id="policy-approver"
+                      className="input select"
+                      required
+                      value={approver}
+                      onChange={(event) => setApprover(event.target.value)}
+                    >
+                      <option value="">Select approver</option>
+                      {members.map((member) => (
+                        <option key={member.user_id} value={`user:${member.user_id}`}>
+                          {member.email}
+                        </option>
+                      ))}
+                      {roles.map((role) => (
+                        <option key={role.id} value={`role:${role.id}`}>
+                          Role: {role.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="policy-second-approver">Second approver</label>
+                    <select
+                      id="policy-second-approver"
+                      className="input select"
+                      value={secondApprover}
+                      onChange={(event) => setSecondApprover(event.target.value)}
+                    >
+                      <option value="">No second step</option>
+                      {members.map((member) => (
+                        <option key={member.user_id} value={`user:${member.user_id}`}>
+                          {member.email}
+                        </option>
+                      ))}
+                      {roles.map((role) => (
+                        <option key={role.id} value={`role:${role.id}`}>
+                          Role: {role.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="governance-form-actions">
+                  <button className="btn btn-primary" disabled={busy}>
+                    Protect changes
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
 
-        <div className="settings-section"><h3 className="settings-section-title">Roles and scoped permissions</h3><div className="card settings-card">
-          <form className="governance-form" onSubmit={submitRole}>
-            <input className="input" required value={roleName} onChange={(event) => setRoleName(event.target.value)} placeholder="Custom role name" />
-            <select className="input" value={roleScope} onChange={(event) => setRoleScope(event.target.value as 'project' | 'organization')}><option value="project">Project role</option>{currentProject.organization_id && <option value="organization">Organization role</option>}</select>
-            <select className="input" value={resource} onChange={(event) => setResource(event.target.value)}><option value="secrets">Secrets</option><option value="folders">Folders</option><option value="tags">Tags</option><option value="imports">Imports</option><option value="*">All resources</option></select>
-            <select className="input" value={action} onChange={(event) => setAction(event.target.value)}><option value="list">List</option><option value="read">Read/reveal</option><option value="write">Write</option><option value="*">All actions</option></select>
-            <select className="input" value={effect} onChange={(event) => setEffect(event.target.value as 'allow' | 'deny')}><option value="allow">Allow</option><option value="deny">Deny</option></select>
-            <select className="input" value={roleEnvironment} onChange={(event) => setRoleEnvironment(event.target.value)}><option value="">All environments</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select>
-            <input className="input" value={rolePath} onChange={(event) => setRolePath(event.target.value)} placeholder="/path" />
-            <button className="btn btn-primary" disabled={busy}>Create role</button>
-          </form>
-          <div className="governance-list">{roles.map((role) => <div className="governance-row" key={role.id}><div><strong>{role.name}</strong>{role.is_builtin && <span className="badge">built-in</span>}<div className="text-muted">{role.permissions.map((permission) => `${permission.effect} ${permission.resource}:${permission.action}${permission.path ? ` at ${permission.path}` : ''}`).join(', ')}</div></div></div>)}</div>
-          <form className="governance-form" onSubmit={submitAssignment}>
-            <select className="input" required value={assignmentRole} onChange={(event) => setAssignmentRole(event.target.value)}><option value="">Select role</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select>
-            <select className="input" required value={assignmentSubject} onChange={(event) => setAssignmentSubject(event.target.value)}><option value="">Select user or machine</option>{members.map((member) => <option key={member.user_id} value={`user:${member.user_id}`}>{member.email}</option>)}{machines.map((machine) => <option key={machine.id} value={`machine:${machine.id}`}>Machine: {machine.name}</option>)}</select>
-            <button className="btn btn-secondary" disabled={busy}>Assign role</button>
-          </form>
-          {assignments.map((assignment) => <div className="governance-row" key={assignment.id}><span>{roles.find((role) => role.id === assignment.role_id)?.name ?? 'Role'} → {members.find((member) => member.user_id === assignment.user_id)?.email ?? machines.find((machine) => machine.id === assignment.machine_identity_id)?.name ?? 'Subject'}</span><button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void run(async () => { await deleteAccessAssignment(currentProject.id, assignment.id, accessToken); }, 'Assignment removed.')}>Remove</button></div>)}
-          <div className="governance-form">
-            <select className="input" required value={simulationSubject} onChange={(event) => setSimulationSubject(event.target.value)}><option value="">Simulation subject</option>{members.map((member) => <option key={member.user_id} value={`user:${member.user_id}`}>{member.email}</option>)}{machines.map((machine) => <option key={machine.id} value={`machine:${machine.id}`}>Machine: {machine.name}</option>)}</select>
-            <select className="input" value={simulationResource} onChange={(event) => setSimulationResource(event.target.value)}><option value="secrets">Secrets</option><option value="folders">Folders</option><option value="tags">Tags</option><option value="imports">Imports</option></select>
-            <select className="input" value={simulationAction} onChange={(event) => setSimulationAction(event.target.value)}><option value="list">List</option><option value="read">Read</option><option value="write">Write</option></select>
-            <select className="input" value={simulationEnvironment} onChange={(event) => setSimulationEnvironment(event.target.value)}><option value="">All environments</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select>
-            <input className="input" value={simulationPath} onChange={(event) => setSimulationPath(event.target.value)} placeholder="/path" />
-            <button type="button" className="btn btn-secondary" disabled={busy || !simulationSubject} onClick={runSimulation}>Simulate</button>
-          </div>
-          {simulationResult && <div className={`alert ${simulationResult.allowed ? 'alert-success' : 'alert-error'}`}>{simulationResult.allowed ? 'Allowed' : 'Denied'}: {simulationResult.reason}</div>}
-        </div></div>
+          <section className="settings-section">
+            <h3 className="settings-section-title">Active policies</h3>
+            <div className="card settings-card">
+              {policies.length === 0 ? (
+                <div className="governance-empty">
+                  <ShieldCheck size={28} />
+                  <h3>No approval policies</h3>
+                  <p>Protect production paths so secret changes need review first.</p>
+                </div>
+              ) : (
+                <div className="governance-list">
+                  {policies.map((policy) => (
+                    <div className="governance-row" key={policy.id}>
+                      <div>
+                        <div className="governance-row-title">
+                          <strong>{policy.name}</strong>
+                          <span
+                            className={`badge ${policy.enabled ? 'badge-success' : 'badge-neutral'}`}
+                          >
+                            {policy.enabled ? 'enabled' : 'disabled'}
+                          </span>
+                        </div>
+                        <div className="text-muted">
+                          {envName(environments, policy.environment_id)} · {policy.path} ·{' '}
+                          {policy.steps.length} step{policy.steps.length === 1 ? '' : 's'} ·{' '}
+                          {policy.actions.join(', ')}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
-        <div className="settings-section"><h3 className="settings-section-title">Approval policies</h3><div className="card settings-card">
-          <form className="governance-form" onSubmit={submitPolicy}>
-            <input className="input" required value={policyName} onChange={(event) => setPolicyName(event.target.value)} placeholder="Policy name" />
-            <select className="input" value={policyEnvironment} onChange={(event) => setPolicyEnvironment(event.target.value)}><option value="">All environments</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select>
-            <input className="input" value={policyPath} onChange={(event) => setPolicyPath(event.target.value)} placeholder="/path" />
-            <select className="input" required value={approver} onChange={(event) => setApprover(event.target.value)}><option value="">Select approver</option>{members.map((member) => <option key={member.user_id} value={`user:${member.user_id}`}>{member.email}</option>)}{roles.map((role) => <option key={role.id} value={`role:${role.id}`}>Role: {role.name}</option>)}</select>
-            <select className="input" value={secondApprover} onChange={(event) => setSecondApprover(event.target.value)}><option value="">No second step</option>{members.map((member) => <option key={member.user_id} value={`user:${member.user_id}`}>{member.email}</option>)}{roles.map((role) => <option key={role.id} value={`role:${role.id}`}>Role: {role.name}</option>)}</select>
-            <button className="btn btn-primary" disabled={busy}>Protect changes</button>
-          </form>
-          {policies.map((policy) => <div className="governance-row" key={policy.id}><div><strong>{policy.name}</strong><div className="text-muted">{policy.path} · {policy.steps.length} step(s) · {policy.actions.join(', ')}</div></div><span className="badge">{policy.enabled ? 'enabled' : 'disabled'}</span></div>)}
-        </div></div>
+      {canManageProject && activeTab === 'retention' && retention ? (
+        <div className="governance-panels">
+          <section className="settings-section">
+            <h3 className="settings-section-title">Retention policy</h3>
+            <div className="card settings-card">
+              <p className="settings-note">
+                Control how long secret versions are kept before cleanup.
+              </p>
+              <div className="governance-form-grid">
+                <div className="form-group">
+                  <label htmlFor="retain-versions">Versions to keep</label>
+                  <input
+                    id="retain-versions"
+                    className="input"
+                    type="number"
+                    min="1"
+                    value={retention.retain_versions}
+                    onChange={(event) =>
+                      setRetention({ ...retention, retain_versions: Number(event.target.value) })
+                    }
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="retain-days">Retain for days</label>
+                  <input
+                    id="retain-days"
+                    className="input"
+                    type="number"
+                    value={retention.retain_days ?? ''}
+                    onChange={(event) =>
+                      setRetention({
+                        ...retention,
+                        retain_days: inputNumber(event.target.value),
+                      })
+                    }
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="archive-deleted">Archive deleted after days</label>
+                  <input
+                    id="archive-deleted"
+                    className="input"
+                    type="number"
+                    value={retention.archive_deleted_after_days ?? ''}
+                    onChange={(event) =>
+                      setRetention({
+                        ...retention,
+                        archive_deleted_after_days: inputNumber(event.target.value),
+                      })
+                    }
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+              <div className="governance-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={saveRetention}
+                >
+                  Save retention
+                </button>
+              </div>
+            </div>
+          </section>
 
-        {retention && <div className="settings-section"><h3 className="settings-section-title">Retention and recovery</h3><div className="card settings-card">
-          <div className="governance-form"><label>Versions<input className="input" type="number" min="1" value={retention.retain_versions} onChange={(event) => setRetention({ ...retention, retain_versions: Number(event.target.value) })} /></label><label>Days<input className="input" type="number" value={retention.retain_days ?? ''} onChange={(event) => setRetention({ ...retention, retain_days: inputNumber(event.target.value) })} /></label><label>Archive deleted after days<input className="input" type="number" value={retention.archive_deleted_after_days ?? ''} onChange={(event) => setRetention({ ...retention, archive_deleted_after_days: inputNumber(event.target.value) })} /></label><button className="btn btn-secondary" disabled={busy} onClick={saveRetention}>Save retention</button></div>
-          <div className="governance-form"><select className="input" value={recoveryEnvironment} onChange={(event) => setRecoveryEnvironment(event.target.value)}><option value="">Environment</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select><input className="input" type="datetime-local" value={recoveryAt} onChange={(event) => setRecoveryAt(event.target.value)} /><input className="input" value={recoveryPath} onChange={(event) => setRecoveryPath(event.target.value)} /><button className="btn btn-secondary" disabled={busy || !recoveryAt || !recoveryEnvironment} onClick={() => recover(false)}>Preview</button><button className="btn btn-danger" disabled={busy || !recoveryResult || recoveryResult.dry_run === false} onClick={() => recover(true)}>Apply</button></div>
-          {recoveryResult && <p className="text-muted">{recoveryResult.changed} change(s): {recoveryResult.items.map((item) => `${item.action} ${item.path}/${item.key}`).join(', ') || 'none'}</p>}
-        </div></div>}
-      </>}
+          <section className="settings-section">
+            <h3 className="settings-section-title">Point-in-time recovery</h3>
+            <div className="card settings-card">
+              <p className="settings-note">
+                Preview or restore secrets for an environment as they existed at a chosen time.
+              </p>
+              <div className="governance-form-grid">
+                <div className="form-group">
+                  <label htmlFor="recovery-environment">Environment</label>
+                  <select
+                    id="recovery-environment"
+                    className="input select"
+                    value={recoveryEnvironment}
+                    onChange={(event) => setRecoveryEnvironment(event.target.value)}
+                  >
+                    <option value="">Select environment</option>
+                    {environments.map((environment) => (
+                      <option key={environment.id} value={environment.id}>
+                        {environment.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="recovery-at">Restore point</label>
+                  <input
+                    id="recovery-at"
+                    className="input"
+                    type="datetime-local"
+                    value={recoveryAt}
+                    onChange={(event) => setRecoveryAt(event.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="recovery-path">Path</label>
+                  <input
+                    id="recovery-path"
+                    className="input"
+                    value={recoveryPath}
+                    onChange={(event) => setRecoveryPath(event.target.value)}
+                    placeholder="/"
+                  />
+                </div>
+              </div>
+              <div className="governance-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy || !recoveryAt || !recoveryEnvironment}
+                  onClick={() => recover(false)}
+                >
+                  <RotateCcw size={14} />
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={busy || !recoveryResult || recoveryResult.dry_run === false}
+                  onClick={() => recover(true)}
+                >
+                  Apply recovery
+                </button>
+              </div>
+              {recoveryResult ? (
+                <div className="governance-recovery-result">
+                  <strong>
+                    {recoveryResult.changed} change{recoveryResult.changed === 1 ? '' : 's'}
+                    {recoveryResult.dry_run ? ' (preview)' : ' applied'}
+                  </strong>
+                  <p className="text-muted">
+                    {recoveryResult.items.length
+                      ? recoveryResult.items
+                          .map((item) => `${item.action} ${item.path}/${item.key}`)
+                          .join(', ')
+                      : 'No secrets would change.'}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
