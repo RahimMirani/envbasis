@@ -661,12 +661,99 @@ tbody tr:last-child td { border-bottom: none; }
 
 .global-sidebar-nav { flex: 1; padding: 0 var(--space-3); overflow-y: auto; }
 
-.governance-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); align-items: end; margin-bottom: var(--space-4); }
-.governance-list { display: grid; gap: var(--space-2); margin-bottom: var(--space-4); }
-.governance-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+/* ==========================================
+   ACCESS & APPROVALS (GOVERNANCE)
+   ========================================== */
+.governance-page { max-width: 960px; margin: 0 auto; }
+.governance-page > .auth-status { margin-bottom: var(--space-4); }
+.governance-page .settings-card > .auth-status { margin-top: var(--space-4); }
+.governance-tabs {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  margin-bottom: var(--space-6); padding: 4px;
+  border: 1px solid var(--border-light); border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.governance-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border: 0; border-radius: calc(var(--radius-md) - 2px);
+  background: transparent; color: var(--text-secondary);
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.governance-tab:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+.governance-tab-active,
+.governance-tab-active:hover {
+  color: var(--text-primary); background: rgba(255,255,255,0.08);
+}
+.governance-tab-count {
+  min-width: 18px; height: 18px; padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--warning-light); color: var(--warning);
+  border: 1px solid var(--warning-border);
+  font-size: 11px; line-height: 16px; text-align: center;
+}
+.governance-panels { display: grid; gap: 0; }
+.governance-form-stack { display: grid; gap: 0; }
+.governance-form-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.governance-form-grid .form-group { margin-bottom: 0; }
+.governance-form-actions {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.governance-inline-field { display: flex; gap: var(--space-2); align-items: center; }
+.governance-inline-field .input,
+.governance-inline-field .select { flex: 1; min-width: 0; }
+.governance-list { display: grid; gap: 0; }
+.governance-list-empty { margin: var(--space-4) 0 0; }
+.governance-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--space-3); padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--border-light);
+}
 .governance-row:last-child { border-bottom: 0; }
-.governance-row .badge { margin-left: var(--space-2); }
+.governance-row-title {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
+  margin-bottom: 4px;
+}
 .governance-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: flex-end; }
+.governance-request-list { display: grid; gap: var(--space-3); }
+.governance-request {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: var(--space-4); padding: var(--space-4);
+  border: 1px solid var(--border-light); border-radius: var(--radius-md);
+  background: rgba(255,255,255,0.02);
+}
+.governance-request-main { min-width: 0; flex: 1; }
+.governance-request-title-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
+  margin-bottom: 6px;
+}
+.governance-request-meta {
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3);
+  color: var(--text-tertiary); font-size: 12px;
+}
+.governance-empty {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: var(--space-8) var(--space-4); color: var(--text-tertiary);
+}
+.governance-empty h3 {
+  margin: var(--space-3) 0 var(--space-1); color: var(--text-primary); font-size: var(--text-md);
+}
+.governance-empty p { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
+.governance-recovery-result {
+  margin-top: var(--space-5); padding-top: var(--space-4);
+  border-top: 1px solid var(--border-light);
+}
+.governance-recovery-result p { margin: 6px 0 0; }
+@media (max-width: 720px) {
+  .governance-form-grid { grid-template-columns: 1fr; }
+  .governance-request { flex-direction: column; }
+  .governance-actions { justify-content: flex-start; }
+  .governance-inline-field { flex-direction: column; align-items: stretch; }
+}
 .global-sidebar-section-label {
   font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: #666; padding: var(--space-1) var(--space-3);
@@ -1088,6 +1175,7 @@ tbody tr:last-child td { border-bottom: none; }
 .auth-form { display: flex; flex-direction: column; }
 .auth-status { display: flex; align-items: center; gap: var(--space-3); border-radius: var(--radius-md); border: 1px solid rgba(255, 255, 255, 0.1); padding: var(--space-3) var(--space-4); font-size: var(--text-sm); color: var(--text-primary); }
 .auth-status-error { background: rgba(248, 113, 113, 0.08); border-color: rgba(248, 113, 113, 0.25); color: #fecaca; }
+.auth-status-success { background: rgba(74, 222, 128, 0.08); border-color: rgba(74, 222, 128, 0.25); color: #bbf7d0; }
 .auth-status-info { justify-content: center; margin-top: var(--space-4); background: rgba(255, 255, 255, 0.03); }
 .auth-google-btn {
   width: 100%; height: 48px; font-size: var(--text-base); margin-top: var(--space-4); margin-bottom: var(--space-6);
@@ -1493,13 +1581,6 @@ tbody tr:last-child td { border-bottom: none; }
    MACHINE IDENTITIES PAGE
    ========================================== */
 .machine-identities-page { max-width: 1100px; margin: 0 auto; }
-.machine-migration-note {
-  display: flex; align-items: flex-start; gap: var(--space-3); margin-bottom: var(--space-5);
-  padding: var(--space-4); border: 1px solid var(--info-border); border-radius: var(--radius-md);
-  background: var(--info-light); color: var(--info);
-}
-.machine-migration-note strong { display: block; margin-bottom: 2px; font-size: 13px; color: var(--info); }
-.machine-migration-note p { margin: 0; font-size: 12px; }
 .machine-identity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .machine-identity-card { padding: var(--space-5); min-width: 0; }
 .machine-identity-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
