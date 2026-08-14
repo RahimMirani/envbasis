@@ -763,17 +763,6 @@ export default function MachineIdentitiesPage() {
         </div>
       </div>
 
-      <div className="machine-migration-note">
-        <ShieldCheck size={17} />
-        <div>
-          <strong>Replacing legacy runtime tokens</strong>
-          <p>
-            New deployments should exchange a client ID and secret for a short-lived access token.
-            Existing runtime tokens remain available only during the CLI migration window.
-          </p>
-        </div>
-      </div>
-
       {error ? (
         <div className="auth-status auth-status-error" role="alert">
           <span>{error}</span>
