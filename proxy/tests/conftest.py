@@ -14,11 +14,13 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("MACHINE_AUTH_JWT_SECRET", "test-machine-jwt-secret-that-is-long-enough")
 
 from envbasis_proxy.config import ProxySettings  # noqa: E402
+from envbasis_proxy.credentials import credential_resolver  # noqa: E402
 from envbasis_proxy.main import create_app  # noqa: E402
 
 
 MACHINE_SECRET = "test-machine-jwt-secret-that-is-long-enough"
 OPENAI_KEY = "sk-test-openai-provider-key"
+ANTHROPIC_KEY = "sk-ant-test-provider-key"
 GITHUB_TOKEN = "github_pat_test_provider_token"
 
 
@@ -73,11 +75,14 @@ def recorder() -> UpstreamRecorder:
 
 @pytest.fixture
 def client(recorder: UpstreamRecorder) -> TestClient:
+    credential_resolver.clear()
     settings = ProxySettings(
         machine_auth_jwt_secret=MACHINE_SECRET,
         openai_api_key=OPENAI_KEY,
+        anthropic_api_key=ANTHROPIC_KEY,
         github_token=GITHUB_TOKEN,
         openai_upstream_url="https://api.openai.com",
+        anthropic_upstream_url="https://api.anthropic.com",
         github_upstream_url="https://api.github.com",
         max_request_bytes=4096,
         max_response_bytes=4096,

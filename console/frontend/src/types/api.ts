@@ -288,7 +288,29 @@ export interface RuntimeTokenShare {
   created_at: string;
 }
 
-export type MachineIdentityAction = 'secrets:read';
+export type MachineIdentityAction = 'secrets:read' | 'proxy:use';
+
+export type ProviderName = 'openai' | 'anthropic' | 'github';
+
+export interface ProviderCredential {
+  id: string;
+  project_id: string;
+  environment_id: string;
+  provider: ProviderName;
+  key_last4: string;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderCredentialListResponse {
+  credentials: ProviderCredential[];
+}
+
+export interface ProviderCredentialUpsert {
+  provider: ProviderName;
+  secret: string;
+}
 
 export interface MachineCredential {
   id: string;

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     machine_auth_max_failed_attempts: int = Field(default=5, ge=2, le=50)
     machine_auth_lockout_seconds: int = Field(default=900, ge=60, le=86400)
     machine_auth_default_rotation_overlap_seconds: int = Field(default=0, ge=0, le=604800)
+    proxy_service_token: str | None = None
     webhooks_enabled: bool = False
     webhook_request_timeout_seconds: int = Field(default=10, ge=1, le=60)
     webhook_max_attempts: int = Field(default=5, ge=1, le=20)
@@ -154,6 +155,8 @@ class Settings(BaseSettings):
             raise ValueError("CLI_AUTH_JWT_SECRET must be set to a real value in production.")
         if not self.machine_auth_jwt_secret or self.machine_auth_jwt_secret == "replace-me":
             raise ValueError("MACHINE_AUTH_JWT_SECRET must be set to a real value in production.")
+        if not self.proxy_service_token or self.proxy_service_token == "replace-me":
+            raise ValueError("PROXY_SERVICE_TOKEN must be set to a real value in production.")
         if self.rate_limit_backend != "redis" or not self.redis_url:
             raise ValueError(
                 "Production requires RATE_LIMIT_BACKEND=redis and a REDIS_URL."

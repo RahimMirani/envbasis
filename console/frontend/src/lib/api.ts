@@ -18,6 +18,10 @@ import type {
   MachineIdentity,
   MachineIdentityCredential,
   MachineIdentityWrite,
+  ProviderCredential,
+  ProviderCredentialListResponse,
+  ProviderCredentialUpsert,
+  ProviderName,
   MachineCredential,
   MachineCredentialSecret,
   MachineAuthEvent,
@@ -1118,6 +1122,44 @@ export function listMachineIdentities(
   return apiRequest<MachineIdentity[]>(
     `/projects/${encodePathSegment(projectId)}/machine-identities`,
     { ...options, accessToken }
+  );
+}
+
+export function listProviderCredentials(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<ProviderCredentialListResponse> {
+  return apiRequest<ProviderCredentialListResponse>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/provider-credentials`,
+    { ...options, accessToken }
+  );
+}
+
+export function upsertProviderCredential(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  body: ProviderCredentialUpsert,
+  options: RequestOptions = {}
+): Promise<ProviderCredential> {
+  return apiRequest<ProviderCredential>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/provider-credentials`,
+    { ...options, method: 'PUT', accessToken, body }
+  );
+}
+
+export function deleteProviderCredential(
+  projectId: string,
+  environmentId: string,
+  provider: ProviderName,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<{ detail: string }> {
+  return apiRequest<{ detail: string }>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/provider-credentials/${encodePathSegment(provider)}`,
+    { ...options, method: 'DELETE', accessToken }
   );
 }
 

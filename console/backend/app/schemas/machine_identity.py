@@ -7,7 +7,7 @@ import uuid
 from pydantic import BaseModel, Field, model_validator
 
 
-MachineAction = Literal["secrets:read"]
+MachineAction = Literal["secrets:read", "proxy:use"]
 
 
 class MachineIdentityCreate(BaseModel):
@@ -24,6 +24,8 @@ class MachineIdentityCreate(BaseModel):
     def environment_for_project(self) -> "MachineIdentityCreate":
         if self.scope == "project" and self.environment_id is None:
             raise ValueError("Project-scoped identities require an environment.")
+        if self.scope == "organization" and "proxy:use" in self.allowed_actions:
+            raise ValueError("Organization-scoped identities cannot use the provider proxy.")
         return self
 
 

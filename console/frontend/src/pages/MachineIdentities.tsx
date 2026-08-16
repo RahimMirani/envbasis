@@ -58,6 +58,7 @@ interface IdentityFormState {
   scope: 'project' | 'organization';
   environmentId: string;
   canReadSecrets: boolean;
+  canUseProxy: boolean;
   keyScopeMode: KeyScopeMode;
   keyPatterns: string;
   tokenTtlSeconds: string;
@@ -89,6 +90,7 @@ function createEmptyForm(environmentId = ''): IdentityFormState {
     scope: 'project',
     environmentId,
     canReadSecrets: true,
+    canUseProxy: false,
     keyScopeMode: 'all',
     keyPatterns: '',
     tokenTtlSeconds: DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
@@ -122,6 +124,7 @@ function formFromIdentity(identity: MachineIdentity): IdentityFormState {
     scope: identity.organization_id ? 'organization' : 'project',
     environmentId: identity.environment_id ?? '',
     canReadSecrets: identity.allowed_actions.includes('secrets:read'),
+    canUseProxy: identity.allowed_actions.includes('proxy:use'),
     keyScopeMode: patterns === null ? 'all' : patterns.length === 0 ? 'none' : 'patterns',
     keyPatterns: patterns?.join('\n') ?? '',
     tokenTtlSeconds: String(identity.access_token_ttl_seconds),
@@ -143,11 +146,19 @@ function buildWritePayload(state: IdentityFormState): MachineIdentityWrite {
         ? []
         : splitScopeValues(state.keyPatterns);
 
+  const allowed_actions: MachineIdentityWrite['allowed_actions'] = [];
+  if (state.canReadSecrets) {
+    allowed_actions.push('secrets:read');
+  }
+  if (state.canUseProxy && state.scope === 'project') {
+    allowed_actions.push('proxy:use');
+  }
+
   return {
     name: state.name.trim(),
     environment_id: state.scope === 'project' ? state.environmentId : null,
     scope: state.scope,
-    allowed_actions: state.canReadSecrets ? ['secrets:read'] : [],
+    allowed_actions,
     allowed_secret_keys: allowedSecretKeys,
     trusted_cidrs: splitScopeValues(state.trustedCidrs),
     access_token_ttl_seconds: Number(state.tokenTtlSeconds),
@@ -162,8 +173,11 @@ function validateForm(state: IdentityFormState): string | null {
   if (state.scope === 'project' && !state.environmentId) {
     return 'Select an environment.';
   }
-  if (!state.canReadSecrets) {
+  if (!state.canReadSecrets && !(state.canUseProxy && state.scope === 'project')) {
     return 'Select at least one allowed action.';
+  }
+  if (state.scope === 'organization' && state.canUseProxy) {
+    return 'Organization-scoped identities cannot use the provider proxy.';
   }
   if (state.keyScopeMode === 'patterns' && splitScopeValues(state.keyPatterns).length === 0) {
     return 'Add at least one key pattern or choose a different key scope.';
@@ -236,7 +250,15 @@ function IdentityFormFields({
             id="machine-identity-scope"
             className="input select"
             value={state.scope}
-            onChange={(event) => setField('scope', event.target.value as IdentityFormState['scope'])}
+            onChange={(event) => {
+              const scope = event.target.value as IdentityFormState['scope'];
+              onChange({
+                ...state,
+                scope,
+                canUseProxy: scope === 'organization' ? false : state.canUseProxy,
+                environmentId: scope === 'organization' ? '' : state.environmentId,
+              });
+            }}
             disabled={disabled || editing}
           >
             <option value="project">This project</option>
@@ -274,6 +296,18 @@ function IdentityFormFields({
           <span>
             <strong className="mono">secrets:read</strong>
             <small>Fetch allowed secrets from the selected environment.</small>
+          </span>
+        </label>
+        <label className="machine-check-row">
+          <input
+            type="checkbox"
+            checked={state.canUseProxy && state.scope === 'project'}
+            onChange={(event) => setField('canUseProxy', event.target.checked)}
+            disabled={state.scope === 'organization'}
+          />
+          <span>
+            <strong className="mono">proxy:use</strong>
+            <small>Call the agent proxy so it can inject provider keys for this environment.</small>
           </span>
         </label>
       </fieldset>

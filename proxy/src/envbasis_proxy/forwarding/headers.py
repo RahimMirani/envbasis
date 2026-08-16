@@ -6,6 +6,8 @@ from collections.abc import Mapping
 REQUEST_HEADER_ALLOWLIST = {
     "accept",
     "accept-encoding",
+    "anthropic-beta",
+    "anthropic-version",
     "content-type",
     "idempotency-key",
     "if-match",
@@ -46,12 +48,18 @@ def build_upstream_headers(
         for name, value in incoming.items()
         if name.lower() in REQUEST_HEADER_ALLOWLIST
     }
-    headers["authorization"] = f"Bearer {credential}"
-    if provider == "github":
-        headers.setdefault("accept", "application/vnd.github+json")
-        headers.setdefault("x-github-api-version", "2022-11-28")
-    else:
+    if provider == "anthropic":
+        headers["x-api-key"] = credential
+        headers.setdefault("anthropic-version", "2023-06-01")
         headers.setdefault("accept", "application/json")
+        headers.pop("authorization", None)
+    else:
+        headers["authorization"] = f"Bearer {credential}"
+        if provider == "github":
+            headers.setdefault("accept", "application/vnd.github+json")
+            headers.setdefault("x-github-api-version", "2022-11-28")
+        else:
+            headers.setdefault("accept", "application/json")
     return headers
 
 

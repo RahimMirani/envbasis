@@ -26,16 +26,24 @@ def _optional_uuid(claims: dict[str, Any], key: str) -> uuid.UUID | None:
     return uuid.UUID(str(value)) if value else None
 
 
-def authenticate_machine_request(request: Request, settings: ProxySettings) -> MachinePrincipal:
+def extract_machine_access_token(request: Request) -> str:
     authorization = request.headers.get("authorization", "")
-    scheme, _, access_token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "authentication_required", "message": "A machine access token is required."},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    scheme, _, bearer_token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and bearer_token.strip():
+        return bearer_token.strip()
 
+    api_key = request.headers.get("x-api-key", "").strip()
+    if api_key:
+        return api_key
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "authentication_required", "message": "A machine access token is required."},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def authenticate_machine_token(access_token: str, settings: ProxySettings) -> MachinePrincipal:
     try:
         claims = jwt.decode(
             access_token,
@@ -73,3 +81,6 @@ def authenticate_machine_request(request: Request, settings: ProxySettings) -> M
         token_id=token_id,
     )
 
+
+def authenticate_machine_request(request: Request, settings: ProxySettings) -> MachinePrincipal:
+    return authenticate_machine_token(extract_machine_access_token(request), settings)

@@ -5,7 +5,7 @@ from envbasis_proxy.providers.base import ProviderRequest
 from envbasis_proxy.validation.common import ValidatedRequest
 
 
-def build_github_provider_request(
+def build_anthropic_provider_request(
     validated: ValidatedRequest,
     settings: ProxySettings,
     *,
@@ -13,6 +13,6 @@ def build_github_provider_request(
 ) -> ProviderRequest:
     return ProviderRequest(
         validated=validated,
-        upstream_url=f"{settings.github_upstream_url}/{validated.upstream_path}",
+        upstream_url=f"{settings.anthropic_upstream_url}/{validated.upstream_path}",
         credential=credential,
     )
