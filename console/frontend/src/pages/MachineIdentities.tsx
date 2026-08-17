@@ -16,6 +16,7 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import SectionLoader from '../components/SectionLoader';
+import Select, { envDotClass } from '../components/Select';
 import { useAuth } from '../auth/useAuth';
 import {
   createMachineIdentity,
@@ -51,27 +52,18 @@ interface OutletContextType {
   pageCache: ProjectPageCacheApi;
 }
 
-type KeyScopeMode = 'all' | 'patterns' | 'none';
-
 interface IdentityFormState {
   name: string;
   scope: 'project' | 'organization';
   environmentId: string;
-  canReadSecrets: boolean;
-  canUseProxy: boolean;
-  keyScopeMode: KeyScopeMode;
-  keyPatterns: string;
   tokenTtlSeconds: string;
   credentialExpiresAt: string;
-  trustedCidrs: string;
 }
 
 interface IdentityFormFieldsProps {
   state: IdentityFormState;
   environments: Environment[];
   disabled: boolean;
-  allowOrganizationScope: boolean;
-  editing: boolean;
   onChange: (next: IdentityFormState) => void;
   nameInputRef?: React.RefObject<HTMLInputElement | null>;
 }
@@ -82,20 +74,36 @@ interface CredentialModalProps {
   onClose: () => void;
 }
 
-const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = '3600';
+const ACCESS_TOKEN_TTL_OPTIONS = [
+  { value: '10800', label: '3 hours' },
+  { value: '21600', label: '6 hours' },
+  { value: '43200', label: '12 hours' },
+  { value: '86400', label: '1 day' },
+];
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = '86400';
+
+function formatTokenLifetime(seconds: number): string {
+  if (seconds >= 86_400 && seconds % 86_400 === 0) {
+    const days = seconds / 86_400;
+    return days === 1 ? '1 day' : `${days} days`;
+  }
+  if (seconds >= 3_600 && seconds % 3_600 === 0) {
+    const hours = seconds / 3_600;
+    return hours === 1 ? '1 hour' : `${hours} hours`;
+  }
+  if (seconds >= 60 && seconds % 60 === 0) {
+    return `${seconds / 60} minutes`;
+  }
+  return `${seconds.toLocaleString()} seconds`;
+}
 
 function createEmptyForm(environmentId = ''): IdentityFormState {
   return {
     name: '',
     scope: 'project',
     environmentId,
-    canReadSecrets: true,
-    canUseProxy: false,
-    keyScopeMode: 'all',
-    keyPatterns: '',
     tokenTtlSeconds: DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
     credentialExpiresAt: '',
-    trustedCidrs: '',
   };
 }
 
@@ -113,23 +121,13 @@ function toIsoDateTime(value: string): string | null {
   return value ? new Date(value).toISOString() : null;
 }
 
-function splitScopeValues(value: string): string[] {
-  return [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))];
-}
-
 function formFromIdentity(identity: MachineIdentity): IdentityFormState {
-  const patterns = identity.allowed_secret_keys;
   return {
     name: identity.name,
     scope: identity.organization_id ? 'organization' : 'project',
     environmentId: identity.environment_id ?? '',
-    canReadSecrets: identity.allowed_actions.includes('secrets:read'),
-    canUseProxy: identity.allowed_actions.includes('proxy:use'),
-    keyScopeMode: patterns === null ? 'all' : patterns.length === 0 ? 'none' : 'patterns',
-    keyPatterns: patterns?.join('\n') ?? '',
     tokenTtlSeconds: String(identity.access_token_ttl_seconds),
     credentialExpiresAt: toDateTimeLocal(identity.credential_expires_at),
-    trustedCidrs: identity.trusted_cidrs.join('\n'),
   };
 }
 
@@ -139,23 +137,15 @@ function withoutClientSecret(credential: MachineIdentityCredential): MachineIden
 }
 
 function buildWritePayload(state: IdentityFormState): MachineIdentityWrite {
-  const allowedSecretKeys =
-    state.keyScopeMode === 'all'
-      ? null
-      : state.keyScopeMode === 'none'
-        ? []
-        : splitScopeValues(state.keyPatterns);
-
   return {
     name: state.name.trim(),
     environment_id: state.scope === 'project' ? state.environmentId : null,
     scope: state.scope,
-    allowed_actions: [
-      ...(state.canReadSecrets ? (['secrets:read'] as const) : []),
-      ...(state.canUseProxy ? (['proxy:use'] as const) : []),
-    ],
-    allowed_secret_keys: allowedSecretKeys,
-    trusted_cidrs: splitScopeValues(state.trustedCidrs),
+    // MVP: every project identity is a proxy credential for exactly one
+    // environment. Legacy organization identities keep secrets:read.
+    allowed_actions: state.scope === 'project' ? ['proxy:use'] : ['secrets:read'],
+    allowed_secret_keys: null,
+    trusted_cidrs: [],
     access_token_ttl_seconds: Number(state.tokenTtlSeconds),
     credential_expires_at: toIsoDateTime(state.credentialExpiresAt),
   };
@@ -168,19 +158,10 @@ function validateForm(state: IdentityFormState): string | null {
   if (state.scope === 'project' && !state.environmentId) {
     return 'Select an environment.';
   }
-  if (!state.canReadSecrets && !state.canUseProxy) {
-    return 'Select at least one allowed action.';
-  }
-  if (state.canUseProxy && state.scope === 'organization') {
-    return 'Organization-scoped identities cannot use the provider proxy.';
-  }
-  if (state.keyScopeMode === 'patterns' && splitScopeValues(state.keyPatterns).length === 0) {
-    return 'Add at least one key pattern or choose a different key scope.';
-  }
 
   const ttl = Number(state.tokenTtlSeconds);
   if (!Number.isInteger(ttl) || ttl < 300 || ttl > 86_400) {
-    return 'Access-token lifetime must be between 300 and 86,400 seconds.';
+    return 'Access-token lifetime must be between 3 hours and 1 day.';
   }
   if (state.credentialExpiresAt && Number.isNaN(new Date(state.credentialExpiresAt).getTime())) {
     return 'Choose a valid credential expiry.';
@@ -215,14 +196,24 @@ function IdentityFormFields({
   state,
   environments,
   disabled,
-  allowOrganizationScope,
-  editing,
   onChange,
   nameInputRef,
 }: IdentityFormFieldsProps) {
   const setField = <K extends keyof IdentityFormState>(key: K, value: IdentityFormState[K]) => {
     onChange({ ...state, [key]: value });
   };
+
+  const ttlOptions = ACCESS_TOKEN_TTL_OPTIONS.some(
+    (option) => option.value === state.tokenTtlSeconds
+  )
+    ? ACCESS_TOKEN_TTL_OPTIONS
+    : [
+        {
+          value: state.tokenTtlSeconds,
+          label: `${formatTokenLifetime(Number(state.tokenTtlSeconds))} (current)`,
+        },
+        ...ACCESS_TOKEN_TTL_OPTIONS,
+      ];
 
   return (
     <>
@@ -233,123 +224,41 @@ function IdentityFormFields({
             id="machine-identity-name"
             ref={nameInputRef}
             className="input"
-            placeholder="production-api"
+            placeholder="production-agent"
             value={state.name}
             onChange={(event) => setField('name', event.target.value)}
             disabled={disabled}
           />
         </div>
         <div className="form-group">
-          <label htmlFor="machine-identity-scope">Identity scope</label>
-          <select
-            id="machine-identity-scope"
-            className="input select"
-            value={state.scope}
-            onChange={(event) => {
-              const scope = event.target.value as IdentityFormState['scope'];
-              onChange({
-                ...state,
-                scope,
-                canUseProxy: scope === 'organization' ? false : state.canUseProxy,
-              });
-            }}
-            disabled={disabled || editing}
-          >
-            <option value="project">This project</option>
-            {allowOrganizationScope ? <option value="organization">Entire organization</option> : null}
-          </select>
-          <p className="form-helper">Organization identities use role assignments in each project.</p>
-        </div>
-        <div className="form-group">
           <label htmlFor="machine-identity-environment">Environment</label>
-          <select
+          <Select
             id="machine-identity-environment"
-            className="input select"
             value={state.environmentId}
-            onChange={(event) => setField('environmentId', event.target.value)}
-            disabled={disabled || state.scope === 'organization'}
-          >
-            <option value="">{state.scope === 'organization' ? 'Selected when authenticating' : 'Select environment'}</option>
-            {environments.map((environment) => (
-              <option key={environment.id} value={environment.id}>
-                {environment.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <fieldset className="machine-fieldset" disabled={disabled}>
-        <legend>Allowed actions</legend>
-        <label className="machine-check-row">
-          <input
-            type="checkbox"
-            checked={state.canReadSecrets}
-            onChange={(event) => setField('canReadSecrets', event.target.checked)}
-          />
-          <span>
-            <strong className="mono">secrets:read</strong>
-            <small>Fetch allowed secrets from the selected environment.</small>
-          </span>
-        </label>
-        <label className="machine-check-row">
-          <input
-            type="checkbox"
-            checked={state.canUseProxy}
-            onChange={(event) => setField('canUseProxy', event.target.checked)}
-            disabled={state.scope === 'organization'}
-          />
-          <span>
-            <strong className="mono">proxy:use</strong>
-            <small>Call OpenAI, Anthropic, and GitHub through the EnvBasis proxy using keys stored on Provider keys.</small>
-          </span>
-        </label>
-      </fieldset>
-
-      <div className="form-group">
-        <label htmlFor="machine-key-scope">Secret-key scope</label>
-        <select
-          id="machine-key-scope"
-          className="input select"
-          value={state.keyScopeMode}
-          onChange={(event) => setField('keyScopeMode', event.target.value as KeyScopeMode)}
-          disabled={disabled}
-        >
-          <option value="all">All keys in this environment</option>
-          <option value="patterns">Only matching key patterns</option>
-          <option value="none">No secret keys</option>
-        </select>
-      </div>
-      {state.keyScopeMode === 'patterns' ? (
-        <div className="form-group">
-          <label htmlFor="machine-key-patterns">Allowed key patterns</label>
-          <textarea
-            id="machine-key-patterns"
-            className="input mono machine-scope-input"
-            placeholder={'DATABASE_*\nOPENAI_API_KEY'}
-            value={state.keyPatterns}
-            onChange={(event) => setField('keyPatterns', event.target.value)}
+            onChange={(next) => setField('environmentId', next)}
             disabled={disabled}
+            placeholder="Select environment"
+            options={environments.map((environment) => ({
+              value: environment.id,
+              label: environment.name,
+              dotClass: envDotClass(environment.name),
+            }))}
           />
-          <p className="form-helper">One glob pattern per line or comma-separated.</p>
+          <p className="form-helper">This identity works only in this environment.</p>
         </div>
-      ) : null}
+      </div>
 
       <div className="machine-form-grid">
         <div className="form-group">
-          <label htmlFor="machine-token-ttl">Access-token lifetime (seconds)</label>
-          <input
+          <label htmlFor="machine-token-ttl">Access-token lifetime</label>
+          <Select
             id="machine-token-ttl"
-            className="input mono"
-            type="number"
-            min="300"
-            max="86400"
-            step="60"
             value={state.tokenTtlSeconds}
-            onChange={(event) => setField('tokenTtlSeconds', event.target.value)}
+            onChange={(next) => setField('tokenTtlSeconds', next)}
             disabled={disabled}
+            options={ttlOptions}
           />
-          <p className="form-helper">Short-lived token: 300 seconds to 24 hours.</p>
+          <p className="form-helper">How long each short-lived token stays valid.</p>
         </div>
         <div className="form-group">
           <label htmlFor="machine-credential-expiry">Client credential expiry</label>
@@ -363,19 +272,6 @@ function IdentityFormFields({
           />
           <p className="form-helper">Leave empty for no automatic expiry.</p>
         </div>
-      </div>
-
-      <div className="form-group">
-        <label htmlFor="machine-trusted-cidrs">Trusted IP addresses and CIDRs</label>
-        <textarea
-          id="machine-trusted-cidrs"
-          className="input mono machine-scope-input"
-          placeholder={'203.0.113.24/32\n2001:db8::/48'}
-          value={state.trustedCidrs}
-          onChange={(event) => setField('trustedCidrs', event.target.value)}
-          disabled={disabled}
-        />
-        <p className="form-helper">One IPv4/IPv6 CIDR per line. Empty permits any source IP.</p>
       </div>
     </>
   );
@@ -772,7 +668,8 @@ export default function MachineIdentitiesPage() {
         <div>
           <h1 className="page-heading">Machine Identities</h1>
           <p className="page-subtitle">
-            Give deployed services scoped access without storing a long-lived secrets token.
+            Credentials your agents exchange for short-lived tokens to call OpenAI, Anthropic, and
+            GitHub through the proxy. Each identity works in one environment.
           </p>
         </div>
         <div className="page-header-actions">
@@ -803,7 +700,7 @@ export default function MachineIdentitiesPage() {
         <div className="empty-state">
           <ShieldCheck size={32} />
           <h3>No machine identities yet</h3>
-          <p>Create one for a deployed service, CI job, or agent that needs scoped secrets.</p>
+          <p>Create one for an agent that calls providers through the EnvBasis proxy.</p>
           {environments.length ? (
             <button className="btn btn-primary" onClick={openCreate}>
               <Plus size={14} />
@@ -820,12 +717,6 @@ export default function MachineIdentitiesPage() {
             const environmentName = identity.organization_id
               ? 'Selected per request'
               : environmentById.get(identity.environment_id ?? '') ?? 'Unknown';
-            const keyScope =
-              identity.allowed_secret_keys === null
-                ? 'All keys'
-                : identity.allowed_secret_keys.length === 0
-                  ? 'No keys'
-                  : identity.allowed_secret_keys.join(', ');
 
             return (
               <article className="card machine-identity-card" key={identity.id}>
@@ -893,24 +784,12 @@ export default function MachineIdentitiesPage() {
 
                 <dl className="machine-identity-details">
                   <div>
-                    <dt>Scope</dt>
-                    <dd>{identity.organization_id ? 'Organization' : 'Project'}</dd>
-                  </div>
-                  <div>
                     <dt>Environment</dt>
                     <dd><span className="badge badge-neutral">{environmentName}</span></dd>
                   </div>
                   <div>
-                    <dt>Action</dt>
-                    <dd className="mono">{identity.allowed_actions.join(', ')}</dd>
-                  </div>
-                  <div>
-                    <dt>Key scope</dt>
-                    <dd className="mono machine-scope-summary" title={keyScope}>{keyScope}</dd>
-                  </div>
-                  <div>
                     <dt>Token lifetime</dt>
-                    <dd>{identity.access_token_ttl_seconds.toLocaleString()} seconds</dd>
+                    <dd>{formatTokenLifetime(identity.access_token_ttl_seconds)}</dd>
                   </div>
                   <div>
                     <dt>Credential expiry</dt>
@@ -918,12 +797,6 @@ export default function MachineIdentitiesPage() {
                       {identity.credential_expires_at
                         ? formatDate(identity.credential_expires_at)
                         : 'No expiry'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Trusted networks</dt>
-                    <dd className="mono">
-                      {identity.trusted_cidrs.length ? identity.trusted_cidrs.join(', ') : 'Any IP'}
                     </dd>
                   </div>
                   <div>
@@ -1001,8 +874,6 @@ export default function MachineIdentitiesPage() {
           state={form}
           environments={environments}
           disabled={isSaving}
-          allowOrganizationScope={Boolean(currentProject.organization_id)}
-          editing={Boolean(editingIdentity)}
           onChange={setForm}
           nameInputRef={nameInputRef}
         />
