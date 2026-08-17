@@ -388,6 +388,11 @@ export default function MachineIdentitiesPage() {
   const [showBulkRevokeConfirm, setShowBulkRevokeConfirm] = useState(false);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [showBulkRotateConfirm, setShowBulkRotateConfirm] = useState(false);
+  const [bulkRotateError, setBulkRotateError] = useState<string | null>(null);
+  const [isBulkRotating, setIsBulkRotating] = useState(false);
+  const [bulkRotationResults, setBulkRotationResults] = useState<MachineIdentityCredential[]>([]);
+  const [copiedRotationKey, setCopiedRotationKey] = useState<string | null>(null);
   const [credentialIdentity, setCredentialIdentity] = useState<MachineIdentity | null>(null);
   const [newCredentialName, setNewCredentialName] = useState('default');
   const [newCredentialExpiry, setNewCredentialExpiry] = useState('');
@@ -662,6 +667,48 @@ export default function MachineIdentitiesPage() {
     );
   };
 
+  const handleBulkRotate = async () => {
+    setIsBulkRotating(true);
+    setBulkRotateError(null);
+    const failedNames: string[] = [];
+    const succeededIds: string[] = [];
+    const results: MachineIdentityCredential[] = [];
+    for (const identityId of selectedIdentityIds) {
+      const identity = identities.find((item) => item.id === identityId);
+      try {
+        const rotated = await rotateMachineIdentitySecret(currentProject.id, identityId, accessToken!, {
+          credential_expires_at: identity?.credential_expires_at ?? null,
+          overlap_seconds: 3600,
+        });
+        succeededIds.push(identityId);
+        results.push(rotated);
+        const updatedIdentity = withoutClientSecret(rotated);
+        setIdentities((current) =>
+          current.map((item) => (item.id === updatedIdentity.id ? updatedIdentity : item))
+        );
+      } catch {
+        failedNames.push(identity?.name ?? identityId);
+      }
+    }
+    setIsBulkRotating(false);
+    setSelectedIdentityIds((current) => current.filter((id) => !succeededIds.includes(id)));
+    if (failedNames.length) {
+      setBulkRotateError(`Failed to rotate: ${failedNames.join(', ')}.`);
+    } else {
+      setShowBulkRotateConfirm(false);
+    }
+    if (results.length) {
+      setCopiedRotationKey(null);
+      setBulkRotationResults(results);
+    }
+  };
+
+  const copyRotationValue = async (key: string, value: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopiedRotationKey(key);
+    window.setTimeout(() => setCopiedRotationKey(null), 2000);
+  };
+
   const handleBulkRevoke = async () => {
     setIsRevoking(true);
     setRevokeError(null);
@@ -700,16 +747,28 @@ export default function MachineIdentitiesPage() {
         </div>
         <div className="page-header-actions">
           {selectedIdentityIds.length > 0 && (
-            <button
-              className="btn btn-danger"
-              onClick={() => {
-                setRevokeError(null);
-                setShowBulkRevokeConfirm(true);
-              }}
-            >
-              <ShieldOff size={14} />
-              Revoke Selected ({selectedIdentityIds.length})
-            </button>
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setBulkRotateError(null);
+                  setShowBulkRotateConfirm(true);
+                }}
+              >
+                <RotateCw size={14} />
+                Rotate Selected ({selectedIdentityIds.length})
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  setRevokeError(null);
+                  setShowBulkRevokeConfirm(true);
+                }}
+              >
+                <ShieldOff size={14} />
+                Revoke Selected ({selectedIdentityIds.length})
+              </button>
+            </>
           )}
           <button
             className="btn btn-secondary"
@@ -848,7 +907,6 @@ export default function MachineIdentitiesPage() {
                 <>
                   <div className="machine-details-status">
                     <span className={`badge machine-status machine-status-${status}`}>{status}</span>
-                    <code className="machine-client-id">{detailsIdentity.client_id}</code>
                   </div>
 
                   {status !== 'revoked' ? (
@@ -1146,6 +1204,77 @@ export default function MachineIdentitiesPage() {
         credential={credential}
         title={credentialTitle}
         onClose={() => setCredential(null)}
+      />
+
+      <Modal
+        isOpen={bulkRotationResults.length > 0}
+        onClose={() => setBulkRotationResults([])}
+        title="Client secrets rotated"
+        size="wide"
+        footer={
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setBulkRotationResults([])}
+          >
+            I saved the credentials
+          </button>
+        }
+      >
+        <div className="token-created-warning" role="status">
+          <KeyRound size={18} />
+          <div>
+            <strong>Copy each new client secret now</strong>
+            <p>EnvBasis stores only their hashes. Closing this dialog permanently hides them.</p>
+          </div>
+        </div>
+        {bulkRotationResults.map((item) => (
+          <div className="machine-credential-field" key={item.id}>
+            <span>{item.name}</span>
+            <div className="token-display">
+              <code className="token-value">{item.client_id}</code>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => void copyRotationValue(`${item.id}:id`, item.client_id)}
+              >
+                {copiedRotationKey === `${item.id}:id` ? <Check size={13} /> : <Copy size={13} />}
+                Copy
+              </button>
+            </div>
+            <div className="token-display">
+              <code className="token-value">{item.client_secret}</code>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => void copyRotationValue(`${item.id}:secret`, item.client_secret)}
+              >
+                {copiedRotationKey === `${item.id}:secret` ? <Check size={13} /> : <Copy size={13} />}
+                Copy
+              </button>
+            </div>
+          </div>
+        ))}
+      </Modal>
+
+      <ConfirmDialog
+        isOpen={showBulkRotateConfirm}
+        title={
+          selectedIdentityIds.length === 1
+            ? 'Rotate Machine Identity'
+            : 'Rotate Machine Identities'
+        }
+        description={`Rotate the primary credential of ${selectedIdentityIds.length} selected identit${
+          selectedIdentityIds.length === 1 ? 'y' : 'ies'
+        }? Old secrets keep working for 1 hour; each replacement secret is shown once.`}
+        errorMessage={bulkRotateError}
+        confirmLabel="Rotate Selected"
+        onConfirm={() => void handleBulkRotate()}
+        onClose={() => {
+          if (!isBulkRotating) {
+            setShowBulkRotateConfirm(false);
+            setBulkRotateError(null);
+          }
+        }}
+        isBusy={isBulkRotating}
       />
 
       <ConfirmDialog
