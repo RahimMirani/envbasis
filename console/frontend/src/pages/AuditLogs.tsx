@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Navigate, useOutletContext } from 'react-router-dom';
 import SectionLoader from '../components/SectionLoader';
+import Select from '../components/Select';
 import { useAuth } from '../auth/useAuth';
 import { listAuditLogs, downloadAuditLogs } from '../lib/api';
 import {
@@ -247,31 +248,21 @@ export default function AuditLogsPage() {
       ) : (
         <>
           <div className="audit-filter-bar">
-            <select
-              className="input select audit-filter-select-compact"
+            <Select
+              className="audit-filter-select-compact"
               value={filterAction}
-              onChange={(e) => setFilterAction(e.target.value)}
-              aria-label="Filter by action"
-            >
-              {actionOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterAction}
+              ariaLabel="Filter by action"
+              options={actionOptions}
+            />
 
-            <select
-              className="input select audit-filter-select-compact"
+            <Select
+              className="audit-filter-select-compact"
               value={filterEnv}
-              onChange={(e) => setFilterEnv(e.target.value)}
-              aria-label="Filter by environment"
-            >
-              {environmentOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterEnv}
+              ariaLabel="Filter by environment"
+              options={environmentOptions}
+            />
 
             {hasActiveFilters && (
               <button className="audit-clear-btn" onClick={handleClearFilters}>
