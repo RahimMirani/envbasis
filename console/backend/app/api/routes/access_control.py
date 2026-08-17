@@ -13,6 +13,7 @@ from app.models.access_role import AccessRole, AccessRoleAssignment, AccessRoleP
 from app.models.environment import Environment
 from app.models.machine_identity import MachineIdentity
 from app.models.organization import Organization, OrganizationMember
+from app.models.project_member import ProjectMember
 from app.models.user import User
 from app.schemas.access_control import (
     AccessRoleCreate,
@@ -277,9 +278,10 @@ def simulate_permission(
     project_access: ProjectAccess = Depends(require_project_owner),
     db: Session = Depends(get_db),
 ) -> PermissionSimulationRead:
+    project = project_access.project
     decision = evaluate_permission(
         db,
-        project=project_access.project,
+        project=project,
         user_id=payload.user_id,
         machine_identity_id=payload.machine_identity_id,
         resource=payload.resource,
@@ -287,10 +289,57 @@ def simulate_permission(
         environment_id=payload.environment_id,
         path=payload.path,
     )
-    return PermissionSimulationRead(
-        allowed=decision.allowed,
-        assigned=decision.assigned,
-        reason=decision.reason,
-        matched_role_ids=list(decision.matched_role_ids),
-        matched_permission_ids=list(decision.matched_permission_ids),
-    )
+    if decision.assigned:
+        return PermissionSimulationRead(
+            allowed=decision.allowed,
+            assigned=decision.assigned,
+            reason=decision.reason,
+            matched_role_ids=list(decision.matched_role_ids),
+            matched_permission_ids=list(decision.matched_permission_ids),
+        )
+
+    # No roles assigned: mirror the default enforcement rules
+    # (see enforce_project_permission / get_project_access in api.deps).
+    def _default(allowed: bool, reason: str) -> PermissionSimulationRead:
+        return PermissionSimulationRead(
+            allowed=allowed,
+            assigned=False,
+            reason=reason,
+            matched_role_ids=[],
+            matched_permission_ids=[],
+        )
+
+    if payload.user_id is not None:
+        if project.owner_id == payload.user_id:
+            return _default(True, "project_owner")
+        membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == payload.user_id,
+            )
+        )
+        if membership is None:
+            return _default(False, "not_a_project_member")
+        if payload.action in {"read", "list"}:
+            return _default(True, "member_default_read")
+        if membership.can_push_pull_secrets:
+            return _default(True, "member_can_push_pull")
+        return _default(False, "member_write_not_allowed")
+
+    machine = db.get(MachineIdentity, payload.machine_identity_id)
+    if machine is None or not (
+        machine.project_id == project.id
+        or (machine.organization_id is not None and machine.organization_id == project.organization_id)
+    ):
+        raise HTTPException(status_code=404, detail="Machine identity not found.")
+    if (
+        machine.environment_id is not None
+        and payload.environment_id is not None
+        and machine.environment_id != payload.environment_id
+    ):
+        return _default(False, "machine_environment_mismatch")
+    if payload.action == "write":
+        return _default(False, "machine_read_only")
+    if "secrets:read" in (machine.allowed_actions or []):
+        return _default(True, "machine_default_read")
+    return _default(False, "machine_cannot_read")
