@@ -319,6 +319,8 @@ def update_machine_identity(
             identity.environment_id = environment.id
             updates["environment_id"] = str(environment.id)
         if "allowed_actions" in payload.model_fields_set and payload.allowed_actions is not None:
+            if identity.organization_id is not None and "proxy:use" in payload.allowed_actions:
+                raise ValueError("Organization-scoped identities cannot use the provider proxy.")
             identity.allowed_actions = list(payload.allowed_actions)
             updates["allowed_actions"] = identity.allowed_actions
         elif "allowed_actions" in payload.model_fields_set:
