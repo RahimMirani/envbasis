@@ -288,7 +288,7 @@ export interface RuntimeTokenShare {
   created_at: string;
 }
 
-export type MachineIdentityAction = 'secrets:read';
+export type MachineIdentityAction = 'secrets:read' | 'proxy:use';
 
 export interface MachineCredential {
   id: string;
@@ -356,6 +356,20 @@ export interface MachineIdentityWrite {
   trusted_cidrs: string[];
   access_token_ttl_seconds: number;
   credential_expires_at: string | null;
+}
+
+export type ProviderName = 'openai' | 'anthropic' | 'github';
+
+export interface ProviderCredential {
+  provider: ProviderName;
+  configured: boolean;
+  key_last4: string;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export interface ProviderCredentialListResponse {
+  items: ProviderCredential[];
 }
 
 export interface AuditLog {
