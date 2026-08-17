@@ -6,7 +6,23 @@ from fastapi.testclient import TestClient
 from conftest import OPENAI_KEY, UpstreamRecorder
 
 
-def test_valid_response_request_is_forwarded_with_provider_key(
+def test_chat_completions_request_is_forwarded(
+    client: TestClient,
+    recorder: UpstreamRecorder,
+    auth_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        "/openai/v1/chat/completions",
+        headers=auth_headers,
+        json={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 200
+    assert len(recorder.requests) == 1
+    assert recorder.requests[0].url == httpx.URL("https://api.openai.com/v1/chat/completions")
+
+
+def test_responses_request_is_forwarded(
     client: TestClient,
     recorder: UpstreamRecorder,
     auth_headers: dict[str, str],
