@@ -22,6 +22,7 @@ import {
   Search,
   Star,
   ShieldCheck,
+  PlugZap,
 } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import OwnerOnlyHint from './OwnerOnlyHint';
@@ -82,6 +83,7 @@ export default function Sidebar({
   const links = [
     { to: `${basePath}/overview`, icon: LayoutDashboard, label: 'Overview' },
     { to: `${basePath}/secrets`, icon: KeyRound, label: 'Secrets' },
+    { to: `${basePath}/provider-keys`, icon: PlugZap, label: 'Provider keys' },
     { to: `${basePath}/environments`, icon: GitBranch, label: 'Environments' },
     { to: `${basePath}/team`, icon: Users, label: 'Team' },
     {
