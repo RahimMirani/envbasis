@@ -20,7 +20,6 @@ import {
   createAccessRole,
   createApprovalRequest,
   createApprovalPolicy,
-  createOrganization,
   deleteAccessAssignment,
   getSecretRetention,
   listAccessAssignments,
@@ -29,10 +28,8 @@ import {
   listApprovalRequests,
   listMachineIdentities,
   listMembers,
-  listOrganizations,
   recoverEnvironmentSecrets,
   updateSecretRetention,
-  updateProject,
   simulatePermission,
 } from '../lib/api';
 import { formatRelativeTime } from '../lib/format';
@@ -44,7 +41,6 @@ import type {
   Environment,
   MachineIdentity,
   Member,
-  Organization,
   PermissionSimulation,
   Project,
   RecoveryResult,
@@ -55,7 +51,6 @@ interface OutletContextType {
   currentProject: Project;
   environments: Environment[];
   canManageProject: boolean;
-  onProjectUpdated: (project: Project) => void;
 }
 
 type GovernanceTab = 'approvals' | 'roles' | 'policies' | 'retention';
@@ -91,7 +86,7 @@ function approvalStatusBadge(status: string): string {
 }
 
 export default function GovernancePage() {
-  const { currentProject, environments, canManageProject, onProjectUpdated } =
+  const { currentProject, environments, canManageProject } =
     useOutletContext<OutletContextType>();
   const { accessToken } = useAuth();
   const [roles, setRoles] = useState<AccessRole[]>([]);
@@ -101,7 +96,6 @@ export default function GovernancePage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [machines, setMachines] = useState<MachineIdentity[]>([]);
   const [retention, setRetention] = useState<SecretRetention | null>(null);
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +108,6 @@ export default function GovernancePage() {
   const [effect, setEffect] = useState<'allow' | 'deny'>('allow');
   const [roleEnvironment, setRoleEnvironment] = useState('');
   const rolePath = '/';
-  const [roleScope, setRoleScope] = useState<'project' | 'organization'>('project');
   const [assignmentRole, setAssignmentRole] = useState('');
   const [assignmentSubject, setAssignmentSubject] = useState('');
 
@@ -129,10 +122,6 @@ export default function GovernancePage() {
   const [recoveryAt, setRecoveryAt] = useState('');
   const [recoveryPath, setRecoveryPath] = useState('/');
   const [recoveryResult, setRecoveryResult] = useState<RecoveryResult | null>(null);
-  const [organizationName, setOrganizationName] = useState('');
-  const [selectedOrganization, setSelectedOrganization] = useState(
-    currentProject.organization_id ?? '',
-  );
   const [simulationSubject, setSimulationSubject] = useState('');
   const [simulationResource, setSimulationResource] = useState('secrets');
   const [simulationAction, setSimulationAction] = useState('read');
@@ -162,7 +151,6 @@ export default function GovernancePage() {
           nextMembers,
           nextMachines,
           nextRetention,
-          nextOrganizations,
         ] = await Promise.all([
           listAccessRoles(currentProject.id, accessToken),
           listAccessAssignments(currentProject.id, accessToken),
@@ -171,7 +159,6 @@ export default function GovernancePage() {
           listMembers(currentProject.id, accessToken),
           listMachineIdentities(currentProject.id, accessToken),
           getSecretRetention(currentProject.id, accessToken),
-          listOrganizations(accessToken),
         ]);
         setRoles(nextRoles);
         setAssignments(nextAssignments);
@@ -180,7 +167,6 @@ export default function GovernancePage() {
         setMembers(nextMembers);
         setMachines(nextMachines);
         setRetention(nextRetention);
-        setOrganizations(nextOrganizations);
       } else {
         setRequests(await common);
       }
@@ -195,9 +181,6 @@ export default function GovernancePage() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    setSelectedOrganization(currentProject.organization_id ?? '');
-  }, [currentProject.organization_id]);
 
   useEffect(() => {
     if (!canManageProject && activeTab !== 'approvals') {
@@ -244,9 +227,6 @@ export default function GovernancePage() {
     void run(async () => {
       await createAccessRole(currentProject.id, accessToken!, {
         name: roleName,
-        ...(roleScope === 'organization' && currentProject.organization_id
-          ? { organization_id: currentProject.organization_id }
-          : {}),
         permissions: [
           {
             resource,
@@ -387,15 +367,6 @@ export default function GovernancePage() {
     }, 'Permission simulation complete.');
   };
 
-  const saveOrganization = () => {
-    void run(async () => {
-      const updated = await updateProject(currentProject.id, accessToken!, {
-        organization_id: selectedOrganization || null,
-      });
-      onProjectUpdated(updated);
-    }, 'Project organization updated.');
-  };
-
   if (!accessToken) return <Navigate to="/login" replace />;
   if (isLoading) return <SectionLoader label="Loading access & approvals" />;
 
@@ -408,9 +379,8 @@ export default function GovernancePage() {
     })),
   ];
   const subjectSelectOptions = [
-    { value: '', label: 'Select subject' },
+    { value: '', label: 'Select member' },
     ...members.map((member) => ({ value: `user:${member.user_id}`, label: member.email })),
-    ...machines.map((machine) => ({ value: `machine:${machine.id}`, label: `Machine: ${machine.name}` })),
   ];
   const approverSelectOptions = (placeholderLabel: string) => [
     { value: '', label: placeholderLabel },
@@ -671,72 +641,6 @@ export default function GovernancePage() {
       {canManageProject && activeTab === 'roles' ? (
         <div className="governance-panels">
           <section className="settings-section">
-            <h3 className="settings-section-title">Organization scope</h3>
-            <div className="card settings-card">
-              <p className="settings-note">
-                Organization roles apply to every attached project. Only the organization owner can
-                assign them.
-              </p>
-              <div className="governance-form-grid">
-                <div className="form-group">
-                  <label htmlFor="organization-name">Create organization</label>
-                  <div className="governance-inline-field">
-                    <input
-                      id="organization-name"
-                      className="input"
-                      value={organizationName}
-                      onChange={(event) => setOrganizationName(event.target.value)}
-                      placeholder="Organization name"
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      disabled={busy || !organizationName.trim()}
-                      onClick={() =>
-                        void run(async () => {
-                          const organization = await createOrganization(accessToken, {
-                            name: organizationName,
-                          });
-                          setOrganizations((items) => [...items, organization]);
-                          setSelectedOrganization(organization.id);
-                          setOrganizationName('');
-                        }, 'Organization created. Attach it to enable organization roles.')
-                      }
-                    >
-                      Create
-                    </button>
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label htmlFor="organization-select">Attach to project</label>
-                  <div className="governance-inline-field">
-                    <Select
-                      id="organization-select"
-                      value={selectedOrganization}
-                      onChange={setSelectedOrganization}
-                      options={[
-                        { value: '', label: 'No organization' },
-                        ...organizations.map((organization) => ({
-                          value: organization.id,
-                          label: organization.name,
-                        })),
-                      ]}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={busy}
-                      onClick={saveOrganization}
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="settings-section">
             <h3 className="settings-section-title">Create a role</h3>
             <div className="card settings-card">
               <form className="governance-form-stack" onSubmit={submitRole}>
@@ -750,20 +654,6 @@ export default function GovernancePage() {
                       value={roleName}
                       onChange={(event) => setRoleName(event.target.value)}
                       placeholder="Secrets reader"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="role-scope">Scope</label>
-                    <Select
-                      id="role-scope"
-                      value={roleScope}
-                      onChange={(next) => setRoleScope(next as 'project' | 'organization')}
-                      options={[
-                        { value: 'project', label: 'Project role' },
-                        ...(currentProject.organization_id
-                          ? [{ value: 'organization', label: 'Organization role' }]
-                          : []),
-                      ]}
                     />
                   </div>
                   <div className="form-group">
@@ -883,7 +773,7 @@ export default function GovernancePage() {
                     />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="assignment-subject">Member or machine</label>
+                    <label htmlFor="assignment-subject">Member</label>
                     <Select
                       id="assignment-subject"
                       value={assignmentSubject}
