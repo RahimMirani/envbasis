@@ -21,6 +21,12 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
+const INITIAL_FOCUS_SELECTOR = [
+  'input:not([disabled]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"])',
+  'textarea:not([disabled])',
+  'select:not([disabled])',
+].join(', ');
+
 export default function Modal({
   isOpen,
   onClose,
@@ -33,7 +39,9 @@ export default function Modal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
   const titleId = useId();
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!isOpen) {
@@ -43,8 +51,10 @@ export default function Modal({
     previousActiveElementRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+    const modalBody = dialogRef.current?.querySelector('.modal-body');
     const focusTarget =
       initialFocusRef?.current ||
+      modalBody?.querySelector<HTMLElement>(INITIAL_FOCUS_SELECTOR) ||
       dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ||
       closeButtonRef.current ||
       dialogRef.current;
@@ -52,7 +62,7 @@ export default function Modal({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -92,14 +102,14 @@ export default function Modal({
         previousActiveElementRef.current.focus();
       }
     };
-  }, [initialFocusRef, isOpen, onClose]);
+  }, [initialFocusRef, isOpen]);
 
   if (!isOpen) {
     return null;
   }
 
   return createPortal(
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={() => onCloseRef.current()}>
       <div
         className={`modal${size === 'wide' ? ' modal-wide' : ''} animate-in`}
         ref={dialogRef}
@@ -113,8 +123,9 @@ export default function Modal({
           <h3 id={titleId}>{title}</h3>
           <button
             ref={closeButtonRef}
+            type="button"
             className="btn btn-ghost btn-icon btn-sm"
-            onClick={onClose}
+            onClick={() => onCloseRef.current()}
             aria-label="Close modal"
           >
             <X size={16} />
