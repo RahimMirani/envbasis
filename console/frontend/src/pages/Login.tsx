@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import GoogleIcon from '../components/GoogleIcon';
-import SecretsTerminal from '../components/SecretsTerminal';
+import AuthProxyPreview from '../components/AuthProxyPreview';
 import { useAuth } from '../auth/useAuth';
 import { getStoredRedirectPath, clearStoredRedirectPath } from '../auth/redirect';
 import { resetButtonGlow, updateButtonGlow } from '../lib/buttonGlow';
@@ -95,8 +95,7 @@ export default function LoginPage() {
       </div>
       <aside className="auth-side auth-side-demo" aria-hidden="true">
         <div className="auth-demo-inner">
-          <SecretsTerminal />
-          <p className="auth-demo-caption">Secrets are encrypted before they leave your machine.</p>
+          <AuthProxyPreview />
         </div>
       </aside>
     </div>
