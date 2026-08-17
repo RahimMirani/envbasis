@@ -15,7 +15,7 @@ function HackathonModal({ onClose }: { onClose: () => void }) {
               <Trophy size={12} />
               <span>Hackathon</span>
             </div>
-            <button className="hackathon-close" onClick={onClose} aria-label="Close">
+            <button type="button" className="hackathon-close" onClick={onClose} aria-label="Close">
               <X size={14} />
             </button>
           </div>
