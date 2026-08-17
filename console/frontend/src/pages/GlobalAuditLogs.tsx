@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import SectionLoader from '../components/SectionLoader';
+import Select from '../components/Select';
 import { useAuth } from '../auth/useAuth';
 import { listUnifiedAuditLogs, listProjects } from '../lib/api';
 import {
@@ -231,29 +232,23 @@ export default function GlobalAuditLogsPage() {
       ) : (
         <>
           <div className="audit-filter-bar">
-            <select
-              className="input select audit-filter-select-compact"
+            <Select
+              className="audit-filter-select-compact"
               value={filterSource}
-              onChange={(e) => setFilterSource(e.target.value as 'all' | 'project' | 'cli_auth')}
-              aria-label="Filter by source"
-            >
-              {sourceOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
+              onChange={(next) => setFilterSource(next as 'all' | 'project' | 'cli_auth')}
+              ariaLabel="Filter by source"
+              options={sourceOptions}
+            />
 
             <div className="audit-filter-divider" />
 
-            <select
-              className="input select audit-filter-select-compact"
+            <Select
+              className="audit-filter-select-compact"
               value={filterAction}
-              onChange={(e) => setFilterAction(e.target.value)}
-              aria-label="Filter by action"
-            >
-              {actionOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
+              onChange={setFilterAction}
+              ariaLabel="Filter by action"
+              options={actionOptions}
+            />
 
             {hasActiveFilters && (
               <button className="audit-clear-btn" onClick={() => setFilterAction('all')}>
