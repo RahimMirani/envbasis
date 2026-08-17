@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     machine_auth_max_failed_attempts: int = Field(default=5, ge=2, le=50)
     machine_auth_lockout_seconds: int = Field(default=900, ge=60, le=86400)
     machine_auth_default_rotation_overlap_seconds: int = Field(default=0, ge=0, le=604800)
+    proxy_service_token: str | None = None
     webhooks_enabled: bool = False
     webhook_request_timeout_seconds: int = Field(default=10, ge=1, le=60)
     webhook_max_attempts: int = Field(default=5, ge=1, le=20)
