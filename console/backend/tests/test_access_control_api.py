@@ -92,6 +92,39 @@ def test_builtin_and_custom_roles_with_scoped_simulation(session_factory, seeder
     assert wrong_environment.allowed is False
 
 
+def test_simulation_mirrors_default_access_when_no_roles_assigned(session_factory, seeder) -> None:
+    owner = seeder.user("sim-owner@example.com")
+    reader = seeder.user("sim-reader@example.com")
+    writer = seeder.user("sim-writer@example.com")
+    outsider = seeder.user("sim-outsider@example.com")
+    project = seeder.project(owner, name="sim-project")
+    access = _owner_access(project)
+    seeder.add_member(project=project, user=reader, can_push_pull_secrets=False)
+    seeder.add_member(project=project, user=writer, can_push_pull_secrets=True)
+
+    def simulate(db, user_id, action):
+        return simulate_permission(
+            payload=PermissionSimulationRequest(
+                user_id=user_id, resource="secrets", action=action, path="/"
+            ),
+            project_access=access,
+            db=db,
+        )
+
+    with session_factory() as db:
+        owner_write = simulate(db, owner.id, "write")
+        reader_read = simulate(db, reader.id, "read")
+        reader_write = simulate(db, reader.id, "write")
+        writer_write = simulate(db, writer.id, "write")
+        outsider_read = simulate(db, outsider.id, "read")
+
+    assert owner_write.allowed is True and owner_write.reason == "project_owner"
+    assert reader_read.allowed is True and reader_read.reason == "member_default_read"
+    assert reader_write.allowed is False and reader_write.reason == "member_write_not_allowed"
+    assert writer_write.allowed is True and writer_write.reason == "member_can_push_pull"
+    assert outsider_read.allowed is False and outsider_read.reason == "not_a_project_member"
+
+
 def test_roles_are_additive_but_explicit_deny_wins_for_users_and_machines(
     session_factory, seeder
 ) -> None:
