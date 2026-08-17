@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
+import { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, useRef, useState } from 'react';
 import { Plus, Activity, Clock, KeyRound, Pencil, Trash2 } from 'lucide-react';
-import { useOutletContext } from 'react-router-dom';
+import { useNavigate, useOutletContext } from 'react-router-dom';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import { useAuth } from '../auth/useAuth';
@@ -10,7 +10,10 @@ import type { Project, Environment, SecretStats } from '../types/api';
 
 interface OutletContextType {
   currentProject: Project;
+  projectBasePath: string;
   environments: Environment[];
+  currentEnv: string;
+  onEnvChange: (env: string) => void;
   canManageProject: boolean;
   onEnvironmentCreated: (env: Environment) => void;
   onEnvironmentUpdated: (env: Environment) => void;
@@ -22,7 +25,10 @@ interface OutletContextType {
 export default function EnvironmentsPage() {
   const {
     currentProject,
+    projectBasePath,
     environments,
+    currentEnv,
+    onEnvChange,
     canManageProject,
     onEnvironmentCreated,
     onEnvironmentUpdated,
@@ -31,6 +37,23 @@ export default function EnvironmentsPage() {
     isSecretStatsLoading,
   } = useOutletContext<OutletContextType>();
   const { accessToken } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSelectEnvironment = (env: Environment) => {
+    onEnvChange(env.name);
+    navigate(`${projectBasePath}/overview`);
+  };
+
+  const handleCardKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, env: Environment) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    event.preventDefault();
+    handleSelectEnvironment(env);
+  };
 
   // Create
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -137,10 +160,10 @@ export default function EnvironmentsPage() {
     <div className="environments-page animate-in">
       <div className="page-header">
         <div>
-          <h1 className="page-heading">Environments</h1>
+          <h1 className="page-heading">Select an environment</h1>
           <p className="page-subtitle">
-            Separate your secrets by environment. Each environment has its own set of secrets and
-            machine identities.
+            Pick an environment of {currentProject.name} to work in — it scopes the secrets and
+            machine identities you see. Switch anytime from the top bar.
           </p>
         </div>
         <div className="page-header-actions">
@@ -188,26 +211,42 @@ export default function EnvironmentsPage() {
                 : 'No secret activity';
 
             return (
-              <div className="card env-card" key={env.id} id={`env-${env.name}`}>
+              <div
+                className={`card env-card env-card-selectable${
+                  currentEnv === env.name ? ' env-card-active' : ''
+                }`}
+                key={env.id}
+                id={`env-${env.name}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleSelectEnvironment(env)}
+                onKeyDown={(event) => handleCardKeyDown(event, env)}
+                aria-label={`Work in ${env.name}`}
+              >
                 <div className="env-card-header">
                   <div
                     className="env-card-dot"
                     style={{ background: getEnvironmentColor(env.name) }}
                   />
                   <h3 className="env-card-name mono">{env.name}</h3>
+                  {currentEnv === env.name && <span className="badge badge-success">Selected</span>}
                   {canManageProject && (
                     <div className="env-card-actions">
                       <button
                         className="btn btn-ghost btn-icon-sm"
                         title="Rename environment"
-                        onClick={() => openRenameModal(env)}
+                        onClick={(event: ReactMouseEvent) => {
+                          event.stopPropagation();
+                          openRenameModal(env);
+                        }}
                       >
                         <Pencil size={13} />
                       </button>
                       <button
                         className="btn btn-ghost btn-icon-sm btn-danger-ghost"
                         title="Delete environment"
-                        onClick={() => {
+                        onClick={(event: ReactMouseEvent) => {
+                          event.stopPropagation();
                           setDeleteError(null);
                           setEnvPendingDelete(env);
                         }}
