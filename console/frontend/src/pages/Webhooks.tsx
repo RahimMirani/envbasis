@@ -634,10 +634,20 @@ export default function WebhooksPage() {
         initialFocusRef={urlInputRef}
         footer={
           <>
-            <button className="btn btn-secondary" onClick={closeCreateModal} disabled={isCreating}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={closeCreateModal}
+              disabled={isCreating}
+            >
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={handleCreate} disabled={isCreating}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleCreate}
+              disabled={isCreating}
+            >
               <Plus size={14} />
               {isCreating ? 'Adding...' : 'Add Webhook'}
             </button>
@@ -695,6 +705,7 @@ export default function WebhooksPage() {
           <>
             {historyState.webhook && (
               <button
+                type="button"
                 className="btn btn-secondary"
                 onClick={() => {
                   if (historyState.webhook) {
@@ -708,6 +719,7 @@ export default function WebhooksPage() {
               </button>
             )}
             <button
+              type="button"
               className="btn btn-primary"
               onClick={closeHistoryModal}
               disabled={Boolean(testingWebhookId || redeliveringDeliveryId)}
