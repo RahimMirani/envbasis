@@ -19,6 +19,8 @@ class MachinePrincipal:
     organization_id: uuid.UUID | None
     environment_id: uuid.UUID | None
     token_id: uuid.UUID
+    access_token: str
+    actions: tuple[str, ...]
 
 
 def _optional_uuid(claims: dict[str, Any], key: str) -> uuid.UUID | None:
@@ -57,6 +59,10 @@ def authenticate_machine_request(request: Request, settings: ProxySettings) -> M
         environment_id = _optional_uuid(claims, "environment_id")
         if (project_id is None) == (organization_id is None):
             raise ValueError("invalid machine scope")
+        raw_actions = claims.get("actions") or []
+        if not isinstance(raw_actions, list) or not all(isinstance(item, str) for item in raw_actions):
+            raise ValueError("invalid actions")
+        actions = tuple(raw_actions)
     except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -71,5 +77,7 @@ def authenticate_machine_request(request: Request, settings: ProxySettings) -> M
         organization_id=organization_id,
         environment_id=environment_id,
         token_id=token_id,
+        access_token=access_token,
+        actions=actions,
     )
 
