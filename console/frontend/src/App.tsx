@@ -17,6 +17,7 @@ const SecretsPage = lazy(() => import('./pages/Secrets'));
 const EnvironmentsPage = lazy(() => import('./pages/Environments'));
 const TeamPage = lazy(() => import('./pages/Team'));
 const MachineIdentitiesPage = lazy(() => import('./pages/MachineIdentities'));
+const ProviderKeysPage = lazy(() => import('./pages/ProviderKeys'));
 const AuditLogsPage = lazy(() => import('./pages/AuditLogs'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const GovernancePage = lazy(() => import('./pages/Governance'));
@@ -65,6 +66,7 @@ export default function App() {
             <Route index element={<Navigate to="overview" replace />} />
             <Route path="overview" element={<OverviewPage />} />
             <Route path="secrets" element={<SecretsPage />} />
+            <Route path="provider-keys" element={<ProviderKeysPage />} />
             <Route path="environments" element={<EnvironmentsPage />} />
             <Route path="team" element={<TeamPage />} />
             <Route path="machine-identities" element={<MachineIdentitiesPage />} />
