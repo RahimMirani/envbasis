@@ -81,6 +81,8 @@ def client(recorder: UpstreamRecorder) -> TestClient:
         github_upstream_url="https://api.github.com",
         max_request_bytes=4096,
         max_response_bytes=4096,
+        control_plane_url=None,
+        proxy_service_token=None,
     )
     app = create_app(settings, transport=httpx.MockTransport(recorder.handler))
     with TestClient(app) as test_client:
