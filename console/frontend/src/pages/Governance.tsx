@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/useAuth';
 import SectionLoader from '../components/SectionLoader';
+import Select, { envDotClass } from '../components/Select';
 import {
   actOnApprovalRequest,
   createAccessAssignment,
@@ -213,13 +214,14 @@ export default function GovernancePage() {
     const base: Array<{ id: GovernanceTab; label: string; icon: typeof Shield; count?: number }> = [
       { id: 'approvals', label: 'Approvals', icon: ClipboardList, count: pendingCount || undefined },
     ];
-    if (!canManageProject) return base;
-    return [
-      ...base,
-      { id: 'roles', label: 'Roles', icon: UserCheck },
-      { id: 'policies', label: 'Policies', icon: ShieldCheck },
-      { id: 'retention', label: 'Retention', icon: History },
-    ];
+    if (canManageProject) {
+      base.push(
+        { id: 'roles', label: 'Roles', icon: UserCheck },
+        { id: 'policies', label: 'Policies', icon: ShieldCheck },
+        { id: 'retention', label: 'Retention', icon: History },
+      );
+    }
+    return base;
   }, [canManageProject, pendingCount]);
 
   const run = async (work: () => Promise<void>, success: string) => {
@@ -385,6 +387,25 @@ export default function GovernancePage() {
   if (!accessToken) return <Navigate to="/login" replace />;
   if (isLoading) return <SectionLoader label="Loading access & approvals" />;
 
+  const envSelectOptions = (placeholderLabel: string) => [
+    { value: '', label: placeholderLabel },
+    ...environments.map((environment) => ({
+      value: environment.id,
+      label: environment.name,
+      dotClass: envDotClass(environment.name),
+    })),
+  ];
+  const subjectSelectOptions = [
+    { value: '', label: 'Select subject' },
+    ...members.map((member) => ({ value: `user:${member.user_id}`, label: member.email })),
+    ...machines.map((machine) => ({ value: `machine:${machine.id}`, label: `Machine: ${machine.name}` })),
+  ];
+  const approverSelectOptions = (placeholderLabel: string) => [
+    { value: '', label: placeholderLabel },
+    ...members.map((member) => ({ value: `user:${member.user_id}`, label: member.email })),
+    ...roles.map((role) => ({ value: `role:${role.id}`, label: `Role: ${role.name}` })),
+  ];
+
   return (
     <div className="governance-page animate-in">
       <div className="page-header">
@@ -441,20 +462,12 @@ export default function GovernancePage() {
                 <div className="governance-form-grid">
                   <div className="form-group">
                     <label htmlFor="proposal-environment">Environment</label>
-                    <select
+                    <Select
                       id="proposal-environment"
-                      className="input select"
-                      required
                       value={proposalEnvironment}
-                      onChange={(event) => setProposalEnvironment(event.target.value)}
-                    >
-                      <option value="">Select environment</option>
-                      {environments.map((environment) => (
-                        <option key={environment.id} value={environment.id}>
-                          {environment.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setProposalEnvironment}
+                      options={envSelectOptions('Select environment')}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="proposal-path">Path</label>
@@ -480,18 +493,16 @@ export default function GovernancePage() {
                   </div>
                   <div className="form-group">
                     <label htmlFor="proposal-operation">Operation</label>
-                    <select
+                    <Select
                       id="proposal-operation"
-                      className="input select"
                       value={proposalOperation}
-                      onChange={(event) =>
-                        setProposalOperation(event.target.value as 'create' | 'update' | 'delete')
-                      }
-                    >
-                      <option value="create">Create</option>
-                      <option value="update">Update</option>
-                      <option value="delete">Delete</option>
-                    </select>
+                      onChange={(next) => setProposalOperation(next as 'create' | 'update' | 'delete')}
+                      options={[
+                        { value: 'create', label: 'Create' },
+                        { value: 'update', label: 'Update' },
+                        { value: 'delete', label: 'Delete' },
+                      ]}
+                    />
                   </div>
                 </div>
                 {proposalOperation !== 'delete' ? (
@@ -690,19 +701,18 @@ export default function GovernancePage() {
                 <div className="form-group">
                   <label htmlFor="organization-select">Attach to project</label>
                   <div className="governance-inline-field">
-                    <select
+                    <Select
                       id="organization-select"
-                      className="input select"
                       value={selectedOrganization}
-                      onChange={(event) => setSelectedOrganization(event.target.value)}
-                    >
-                      <option value="">No organization</option>
-                      {organizations.map((organization) => (
-                        <option key={organization.id} value={organization.id}>
-                          {organization.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setSelectedOrganization}
+                      options={[
+                        { value: '', label: 'No organization' },
+                        ...organizations.map((organization) => ({
+                          value: organization.id,
+                          label: organization.name,
+                        })),
+                      ]}
+                    />
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -735,76 +745,67 @@ export default function GovernancePage() {
                   </div>
                   <div className="form-group">
                     <label htmlFor="role-scope">Scope</label>
-                    <select
+                    <Select
                       id="role-scope"
-                      className="input select"
                       value={roleScope}
-                      onChange={(event) =>
-                        setRoleScope(event.target.value as 'project' | 'organization')
-                      }
-                    >
-                      <option value="project">Project role</option>
-                      {currentProject.organization_id ? (
-                        <option value="organization">Organization role</option>
-                      ) : null}
-                    </select>
+                      onChange={(next) => setRoleScope(next as 'project' | 'organization')}
+                      options={[
+                        { value: 'project', label: 'Project role' },
+                        ...(currentProject.organization_id
+                          ? [{ value: 'organization', label: 'Organization role' }]
+                          : []),
+                      ]}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="role-resource">Resource</label>
-                    <select
+                    <Select
                       id="role-resource"
-                      className="input select"
                       value={resource}
-                      onChange={(event) => setResource(event.target.value)}
-                    >
-                      <option value="secrets">Secrets</option>
-                      <option value="folders">Folders</option>
-                      <option value="tags">Tags</option>
-                      <option value="imports">Imports</option>
-                      <option value="*">All resources</option>
-                    </select>
+                      onChange={setResource}
+                      options={[
+                        { value: 'secrets', label: 'Secrets' },
+                        { value: 'folders', label: 'Folders' },
+                        { value: 'tags', label: 'Tags' },
+                        { value: 'imports', label: 'Imports' },
+                        { value: '*', label: 'All resources' },
+                      ]}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="role-action">Action</label>
-                    <select
+                    <Select
                       id="role-action"
-                      className="input select"
                       value={action}
-                      onChange={(event) => setAction(event.target.value)}
-                    >
-                      <option value="list">List</option>
-                      <option value="read">Read / reveal</option>
-                      <option value="write">Write</option>
-                      <option value="*">All actions</option>
-                    </select>
+                      onChange={setAction}
+                      options={[
+                        { value: 'list', label: 'List' },
+                        { value: 'read', label: 'Read / reveal' },
+                        { value: 'write', label: 'Write' },
+                        { value: '*', label: 'All actions' },
+                      ]}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="role-effect">Effect</label>
-                    <select
+                    <Select
                       id="role-effect"
-                      className="input select"
                       value={effect}
-                      onChange={(event) => setEffect(event.target.value as 'allow' | 'deny')}
-                    >
-                      <option value="allow">Allow</option>
-                      <option value="deny">Deny</option>
-                    </select>
+                      onChange={(next) => setEffect(next as 'allow' | 'deny')}
+                      options={[
+                        { value: 'allow', label: 'Allow' },
+                        { value: 'deny', label: 'Deny' },
+                      ]}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="role-environment">Environment</label>
-                    <select
+                    <Select
                       id="role-environment"
-                      className="input select"
                       value={roleEnvironment}
-                      onChange={(event) => setRoleEnvironment(event.target.value)}
-                    >
-                      <option value="">All environments</option>
-                      {environments.map((environment) => (
-                        <option key={environment.id} value={environment.id}>
-                          {environment.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setRoleEnvironment}
+                      options={envSelectOptions('All environments')}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="role-path">Path</label>
@@ -874,42 +875,24 @@ export default function GovernancePage() {
                 <div className="governance-form-grid">
                   <div className="form-group">
                     <label htmlFor="assignment-role">Role</label>
-                    <select
+                    <Select
                       id="assignment-role"
-                      className="input select"
-                      required
                       value={assignmentRole}
-                      onChange={(event) => setAssignmentRole(event.target.value)}
-                    >
-                      <option value="">Select role</option>
-                      {roles.map((role) => (
-                        <option key={role.id} value={role.id}>
-                          {role.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setAssignmentRole}
+                      options={[
+                        { value: '', label: 'Select role' },
+                        ...roles.map((role) => ({ value: role.id, label: role.name })),
+                      ]}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="assignment-subject">Member or machine</label>
-                    <select
+                    <Select
                       id="assignment-subject"
-                      className="input select"
-                      required
                       value={assignmentSubject}
-                      onChange={(event) => setAssignmentSubject(event.target.value)}
-                    >
-                      <option value="">Select subject</option>
-                      {members.map((member) => (
-                        <option key={member.user_id} value={`user:${member.user_id}`}>
-                          {member.email}
-                        </option>
-                      ))}
-                      {machines.map((machine) => (
-                        <option key={machine.id} value={`machine:${machine.id}`}>
-                          Machine: {machine.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setAssignmentSubject}
+                      options={subjectSelectOptions}
+                    />
                   </div>
                 </div>
                 <div className="governance-form-actions">
@@ -965,67 +948,48 @@ export default function GovernancePage() {
               <div className="governance-form-grid">
                 <div className="form-group">
                   <label htmlFor="simulation-subject">Subject</label>
-                  <select
+                  <Select
                     id="simulation-subject"
-                    className="input select"
                     value={simulationSubject}
-                    onChange={(event) => setSimulationSubject(event.target.value)}
-                  >
-                    <option value="">Select subject</option>
-                    {members.map((member) => (
-                      <option key={member.user_id} value={`user:${member.user_id}`}>
-                        {member.email}
-                      </option>
-                    ))}
-                    {machines.map((machine) => (
-                      <option key={machine.id} value={`machine:${machine.id}`}>
-                        Machine: {machine.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSimulationSubject}
+                    options={subjectSelectOptions}
+                  />
                 </div>
                 <div className="form-group">
                   <label htmlFor="simulation-resource">Resource</label>
-                  <select
+                  <Select
                     id="simulation-resource"
-                    className="input select"
                     value={simulationResource}
-                    onChange={(event) => setSimulationResource(event.target.value)}
-                  >
-                    <option value="secrets">Secrets</option>
-                    <option value="folders">Folders</option>
-                    <option value="tags">Tags</option>
-                    <option value="imports">Imports</option>
-                  </select>
+                    onChange={setSimulationResource}
+                    options={[
+                      { value: 'secrets', label: 'Secrets' },
+                      { value: 'folders', label: 'Folders' },
+                      { value: 'tags', label: 'Tags' },
+                      { value: 'imports', label: 'Imports' },
+                    ]}
+                  />
                 </div>
                 <div className="form-group">
                   <label htmlFor="simulation-action">Action</label>
-                  <select
+                  <Select
                     id="simulation-action"
-                    className="input select"
                     value={simulationAction}
-                    onChange={(event) => setSimulationAction(event.target.value)}
-                  >
-                    <option value="list">List</option>
-                    <option value="read">Read</option>
-                    <option value="write">Write</option>
-                  </select>
+                    onChange={setSimulationAction}
+                    options={[
+                      { value: 'list', label: 'List' },
+                      { value: 'read', label: 'Read' },
+                      { value: 'write', label: 'Write' },
+                    ]}
+                  />
                 </div>
                 <div className="form-group">
                   <label htmlFor="simulation-environment">Environment</label>
-                  <select
+                  <Select
                     id="simulation-environment"
-                    className="input select"
                     value={simulationEnvironment}
-                    onChange={(event) => setSimulationEnvironment(event.target.value)}
-                  >
-                    <option value="">All environments</option>
-                    {environments.map((environment) => (
-                      <option key={environment.id} value={environment.id}>
-                        {environment.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSimulationEnvironment}
+                    options={envSelectOptions('All environments')}
+                  />
                 </div>
                 <div className="form-group">
                   <label htmlFor="simulation-path">Path</label>
@@ -1090,19 +1054,12 @@ export default function GovernancePage() {
                   </div>
                   <div className="form-group">
                     <label htmlFor="policy-environment">Environment</label>
-                    <select
+                    <Select
                       id="policy-environment"
-                      className="input select"
                       value={policyEnvironment}
-                      onChange={(event) => setPolicyEnvironment(event.target.value)}
-                    >
-                      <option value="">All environments</option>
-                      {environments.map((environment) => (
-                        <option key={environment.id} value={environment.id}>
-                          {environment.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setPolicyEnvironment}
+                      options={envSelectOptions('All environments')}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="policy-path">Path</label>
@@ -1116,46 +1073,21 @@ export default function GovernancePage() {
                   </div>
                   <div className="form-group">
                     <label htmlFor="policy-approver">First approver</label>
-                    <select
+                    <Select
                       id="policy-approver"
-                      className="input select"
-                      required
                       value={approver}
-                      onChange={(event) => setApprover(event.target.value)}
-                    >
-                      <option value="">Select approver</option>
-                      {members.map((member) => (
-                        <option key={member.user_id} value={`user:${member.user_id}`}>
-                          {member.email}
-                        </option>
-                      ))}
-                      {roles.map((role) => (
-                        <option key={role.id} value={`role:${role.id}`}>
-                          Role: {role.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setApprover}
+                      options={approverSelectOptions('Select approver')}
+                    />
                   </div>
                   <div className="form-group">
                     <label htmlFor="policy-second-approver">Second approver</label>
-                    <select
+                    <Select
                       id="policy-second-approver"
-                      className="input select"
                       value={secondApprover}
-                      onChange={(event) => setSecondApprover(event.target.value)}
-                    >
-                      <option value="">No second step</option>
-                      {members.map((member) => (
-                        <option key={member.user_id} value={`user:${member.user_id}`}>
-                          {member.email}
-                        </option>
-                      ))}
-                      {roles.map((role) => (
-                        <option key={role.id} value={`role:${role.id}`}>
-                          Role: {role.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setSecondApprover}
+                      options={approverSelectOptions('No second step')}
+                    />
                   </div>
                 </div>
                 <div className="governance-form-actions">
@@ -1281,19 +1213,12 @@ export default function GovernancePage() {
               <div className="governance-form-grid">
                 <div className="form-group">
                   <label htmlFor="recovery-environment">Environment</label>
-                  <select
+                  <Select
                     id="recovery-environment"
-                    className="input select"
                     value={recoveryEnvironment}
-                    onChange={(event) => setRecoveryEnvironment(event.target.value)}
-                  >
-                    <option value="">Select environment</option>
-                    {environments.map((environment) => (
-                      <option key={environment.id} value={environment.id}>
-                        {environment.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setRecoveryEnvironment}
+                    options={envSelectOptions('Select environment')}
+                  />
                 </div>
                 <div className="form-group">
                   <label htmlFor="recovery-at">Restore point</label>
