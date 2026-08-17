@@ -10,9 +10,12 @@ import httpx
 
 from envbasis_proxy.auth import authenticate_machine_request
 from envbasis_proxy.config import ProxySettings, get_settings
+from envbasis_proxy.credentials import ControlPlaneCredentialResolver, resolve_provider_secret
 from envbasis_proxy.forwarding.client import forward_request
+from envbasis_proxy.providers.anthropic import build_anthropic_provider_request
 from envbasis_proxy.providers.github import build_github_provider_request
 from envbasis_proxy.providers.openai import build_openai_provider_request
+from envbasis_proxy.validation.anthropic import validate_anthropic_request
 from envbasis_proxy.validation.common import read_request_body
 from envbasis_proxy.validation.github import validate_github_request
 from envbasis_proxy.validation.openai import validate_openai_request
@@ -34,6 +37,10 @@ def create_app(
             timeout=httpx.Timeout(effective_settings.upstream_timeout_seconds),
             follow_redirects=False,
             transport=transport,
+        )
+        app.state.credential_resolver = ControlPlaneCredentialResolver(
+            client=app.state.http_client,
+            settings=effective_settings,
         )
         yield
         await app.state.http_client.aclose()
@@ -60,7 +67,43 @@ def create_app(
         principal = authenticate_machine_request(request, effective_settings)
         body = await read_request_body(request, max_bytes=effective_settings.max_request_bytes)
         validated = validate_openai_request(request, provider_path, body)
-        provider_request = build_openai_provider_request(validated, effective_settings)
+        credential = await resolve_provider_secret(
+            request,
+            settings=effective_settings,
+            provider="openai",
+            principal=principal,
+        )
+        provider_request = build_openai_provider_request(
+            validated,
+            effective_settings,
+            credential=credential,
+        )
+        return await forward_request(
+            request,
+            provider_request=provider_request,
+            principal=principal,
+            settings=effective_settings,
+        )
+
+    @app.api_route(
+        "/anthropic/{provider_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    )
+    async def anthropic_proxy(request: Request, provider_path: str):
+        principal = authenticate_machine_request(request, effective_settings)
+        body = await read_request_body(request, max_bytes=effective_settings.max_request_bytes)
+        validated = validate_anthropic_request(request, provider_path, body)
+        credential = await resolve_provider_secret(
+            request,
+            settings=effective_settings,
+            provider="anthropic",
+            principal=principal,
+        )
+        provider_request = build_anthropic_provider_request(
+            validated,
+            effective_settings,
+            credential=credential,
+        )
         return await forward_request(
             request,
             provider_request=provider_request,
@@ -76,7 +119,17 @@ def create_app(
         principal = authenticate_machine_request(request, effective_settings)
         body = await read_request_body(request, max_bytes=effective_settings.max_request_bytes)
         validated = validate_github_request(request, provider_path, body)
-        provider_request = build_github_provider_request(validated, effective_settings)
+        credential = await resolve_provider_secret(
+            request,
+            settings=effective_settings,
+            provider="github",
+            principal=principal,
+        )
+        provider_request = build_github_provider_request(
+            validated,
+            effective_settings,
+            credential=credential,
+        )
         return await forward_request(
             request,
             provider_request=provider_request,
@@ -96,4 +149,3 @@ def create_app(
 
 
 app = create_app()
-
