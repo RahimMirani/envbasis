@@ -264,6 +264,10 @@ export default function GovernancePage() {
 
   const submitAssignment = (event: FormEvent) => {
     event.preventDefault();
+    if (!assignmentRole || !assignmentSubject) {
+      setError('Select both a role and a member to assign.');
+      return;
+    }
     const [subjectType, subjectId] = assignmentSubject.split(':');
     void run(async () => {
       await createAccessAssignment(currentProject.id, accessToken!, {
@@ -279,6 +283,10 @@ export default function GovernancePage() {
 
   const submitPolicy = (event: FormEvent) => {
     event.preventDefault();
+    if (!approver) {
+      setError('Select a first approver for the policy.');
+      return;
+    }
     const [approverType, approverId] = approver.split(':');
     const [secondType, secondId] = secondApprover.split(':');
     void run(async () => {
@@ -345,6 +353,10 @@ export default function GovernancePage() {
 
   const submitProposal = (event: FormEvent) => {
     event.preventDefault();
+    if (!proposalEnvironment) {
+      setError('Select an environment for the proposed change.');
+      return;
+    }
     void run(async () => {
       await createApprovalRequest(currentProject.id, accessToken!, {
         environment_id: proposalEnvironment,
