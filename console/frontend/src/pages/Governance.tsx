@@ -113,14 +113,14 @@ export default function GovernancePage() {
   const [action, setAction] = useState('read');
   const [effect, setEffect] = useState<'allow' | 'deny'>('allow');
   const [roleEnvironment, setRoleEnvironment] = useState('');
-  const [rolePath, setRolePath] = useState('/');
+  const rolePath = '/';
   const [roleScope, setRoleScope] = useState<'project' | 'organization'>('project');
   const [assignmentRole, setAssignmentRole] = useState('');
   const [assignmentSubject, setAssignmentSubject] = useState('');
 
   const [policyName, setPolicyName] = useState('Production changes');
   const [policyEnvironment, setPolicyEnvironment] = useState('');
-  const [policyPath, setPolicyPath] = useState('/');
+  const policyPath = '/';
   const [approver, setApprover] = useState('');
   const [secondApprover, setSecondApprover] = useState('');
   const [approvalComment, setApprovalComment] = useState('');
@@ -136,11 +136,11 @@ export default function GovernancePage() {
   const [simulationSubject, setSimulationSubject] = useState('');
   const [simulationResource, setSimulationResource] = useState('secrets');
   const [simulationAction, setSimulationAction] = useState('read');
-  const [simulationPath, setSimulationPath] = useState('/');
+  const simulationPath = '/';
   const [simulationEnvironment, setSimulationEnvironment] = useState('');
   const [simulationResult, setSimulationResult] = useState<PermissionSimulation | null>(null);
   const [proposalEnvironment, setProposalEnvironment] = useState('');
-  const [proposalPath, setProposalPath] = useState('/');
+  const proposalPath = '/';
   const [proposalKey, setProposalKey] = useState('');
   const [proposalOperation, setProposalOperation] = useState<'create' | 'update' | 'delete'>(
     'create',
@@ -470,21 +470,12 @@ export default function GovernancePage() {
                     />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="proposal-path">Path</label>
-                    <input
-                      id="proposal-path"
-                      className="input"
-                      required
-                      value={proposalPath}
-                      onChange={(event) => setProposalPath(event.target.value)}
-                      placeholder="/"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="proposal-key">Secret key</label>
+                    <label htmlFor="proposal-key">Secret key name</label>
                     <input
                       id="proposal-key"
-                      className="input"
+                      name="proposal-secret-key-name"
+                      className="input mono"
+                      autoComplete="off"
                       required
                       value={proposalKey}
                       onChange={(event) => setProposalKey(event.target.value)}
@@ -510,10 +501,16 @@ export default function GovernancePage() {
                     <label htmlFor="proposal-value">Secret value</label>
                     <input
                       id="proposal-value"
-                      className="input"
+                      name="proposal-secret-value"
+                      className="input mono input-secret-mask"
                       required
-                      type="password"
+                      type="text"
                       autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      data-lpignore="true"
+                      data-1p-ignore="true"
                       value={proposalValue}
                       onChange={(event) => setProposalValue(event.target.value)}
                       placeholder="Value to apply after approval"
@@ -765,9 +762,7 @@ export default function GovernancePage() {
                       onChange={setResource}
                       options={[
                         { value: 'secrets', label: 'Secrets' },
-                        { value: 'folders', label: 'Folders' },
                         { value: 'tags', label: 'Tags' },
-                        { value: 'imports', label: 'Imports' },
                         { value: '*', label: 'All resources' },
                       ]}
                     />
@@ -805,16 +800,6 @@ export default function GovernancePage() {
                       value={roleEnvironment}
                       onChange={setRoleEnvironment}
                       options={envSelectOptions('All environments')}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="role-path">Path</label>
-                    <input
-                      id="role-path"
-                      className="input"
-                      value={rolePath}
-                      onChange={(event) => setRolePath(event.target.value)}
-                      placeholder="/"
                     />
                   </div>
                 </div>
@@ -963,9 +948,7 @@ export default function GovernancePage() {
                     onChange={setSimulationResource}
                     options={[
                       { value: 'secrets', label: 'Secrets' },
-                      { value: 'folders', label: 'Folders' },
                       { value: 'tags', label: 'Tags' },
-                      { value: 'imports', label: 'Imports' },
                     ]}
                   />
                 </div>
@@ -989,16 +972,6 @@ export default function GovernancePage() {
                     value={simulationEnvironment}
                     onChange={setSimulationEnvironment}
                     options={envSelectOptions('All environments')}
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="simulation-path">Path</label>
-                  <input
-                    id="simulation-path"
-                    className="input"
-                    value={simulationPath}
-                    onChange={(event) => setSimulationPath(event.target.value)}
-                    placeholder="/"
                   />
                 </div>
               </div>
@@ -1059,16 +1032,6 @@ export default function GovernancePage() {
                       value={policyEnvironment}
                       onChange={setPolicyEnvironment}
                       options={envSelectOptions('All environments')}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="policy-path">Path</label>
-                    <input
-                      id="policy-path"
-                      className="input"
-                      value={policyPath}
-                      onChange={(event) => setPolicyPath(event.target.value)}
-                      placeholder="/"
                     />
                   </div>
                   <div className="form-group">
