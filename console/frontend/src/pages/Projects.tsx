@@ -521,10 +521,16 @@ export default function ProjectsPage() {
         footer={
           inviteModal ? (
             <>
-              <button className="btn btn-secondary" onClick={closeInviteModal} disabled={inviteActionBusy}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={closeInviteModal}
+                disabled={inviteActionBusy}
+              >
                 Cancel
               </button>
               <button
+                type="button"
                 className="btn btn-secondary"
                 onClick={handleRejectInvite}
                 disabled={inviteActionBusy}
@@ -533,6 +539,7 @@ export default function ProjectsPage() {
                 Decline
               </button>
               <button
+                type="button"
                 className="btn btn-primary"
                 onClick={handleAcceptInvite}
                 disabled={inviteActionBusy}
@@ -575,6 +582,7 @@ export default function ProjectsPage() {
         footer={
           <>
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={closeCreateModal}
               disabled={isSubmitting}
@@ -582,6 +590,7 @@ export default function ProjectsPage() {
               Cancel
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={handleCreateProject}
               disabled={isSubmitting}
