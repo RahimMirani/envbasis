@@ -14,6 +14,7 @@ from app.models.project_encryption_key import ProjectEncryptionKey
 from app.models.project_invitation import ProjectInvitation
 from app.models.project_member import ProjectMember
 from app.models.project_secret_tag import ProjectSecretTag
+from app.models.provider_credential import ProviderCredential
 from app.models.runtime_token import RuntimeToken
 from app.models.runtime_token_share import RuntimeTokenShare
 from app.models.secret import Secret
@@ -47,6 +48,7 @@ __all__ = [
     "ProjectInvitation",
     "ProjectMember",
     "ProjectSecretTag",
+    "ProviderCredential",
     "RuntimeToken",
     "RuntimeTokenShare",
     "Secret",
