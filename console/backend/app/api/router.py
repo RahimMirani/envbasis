@@ -10,6 +10,8 @@ from app.api.routes.health import router as health_router
 from app.api.routes.invitations import router as invitations_router
 from app.api.routes.machine_identities import router as machine_identities_router
 from app.api.routes.projects import router as projects_router
+from app.api.routes.provider_credentials import router as provider_credentials_router
+from app.api.routes.proxy_internal import router as proxy_internal_router
 from app.api.routes.runtime import router as runtime_router
 from app.api.routes.runtime_tokens import router as runtime_tokens_router
 from app.api.routes.secrets import router as secrets_router
@@ -30,6 +32,8 @@ api_router.include_router(unified_audit_logs_router, tags=["audit-logs"])
 api_router.include_router(cli_auth_router, tags=["cli-auth"])
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(projects_router, tags=["projects"])
+api_router.include_router(provider_credentials_router, tags=["provider-credentials"])
+api_router.include_router(proxy_internal_router, tags=["proxy-internal"])
 api_router.include_router(runtime_router, tags=["runtime"])
 api_router.include_router(secrets_router, tags=["secrets"])
 api_router.include_router(secret_structure_router, tags=["secret-structure"])
