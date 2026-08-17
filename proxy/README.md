@@ -1,6 +1,6 @@
 # EnvBasis Agent Proxy
 
-The Agent Proxy is a separate, stateless data-plane service. It accepts an EnvBasis short-lived machine access token, validates a supported OpenAI or GitHub request, replaces the machine token with the provider credential, and forwards the request to a fixed provider host.
+The Agent Proxy is a separate, stateless data-plane service. It accepts an EnvBasis short-lived machine access token, validates a supported OpenAI, Anthropic, or GitHub request, replaces the machine token with the provider credential stored in the console, and forwards the request to a fixed provider host.
 
 This first release intentionally has no policy or approval system. It validates request shape and applies a fixed safety boundary:
 
@@ -14,7 +14,7 @@ This first release intentionally has no policy or approval system. It validates 
 
 ## Run locally
 
-The proxy and console backend must use the same machine JWT secret, issuer, and audience. Provider credentials are configured only in the proxy environment.
+The proxy and console backend must use the same machine JWT secret, issuer, and audience. Provider API keys are stored in the console **Provider keys** page, not in `proxy/.env`. The proxy authenticates to the control plane with `PROXY_SERVICE_TOKEN`.
 
 ```bash
 cd proxy
@@ -29,44 +29,36 @@ Check the process:
 curl http://localhost:8080/health
 ```
 
-## Obtain a temporary machine token
+## Agent setup (recommended)
 
-Exchange the machine identity's long-lived client credential with the main EnvBasis backend:
-
-```bash
-export ENVBASIS_TOKEN="$(curl -sS \
-  -X POST "$ENVBASIS_API_URL/machine-identities/token" \
-  -H 'Content-Type: application/json' \
-  -d "{\"client_id\":\"$ENVBASIS_CLIENT_ID\",\"client_secret\":\"$ENVBASIS_CLIENT_SECRET\"}" \
-  | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
-```
-
-The client secret is used only for token exchange. Provider calls use the temporary token.
-
-## OpenAI integration
-
-OpenAI SDKs accept a custom base URL. Existing SDK code can use:
+Copy [`docs/snippets/envbasis_session.py`](../docs/snippets/envbasis_session.py) into the agent. Set only machine credentials:
 
 ```bash
-export OPENAI_API_KEY="$ENVBASIS_TOKEN"
-export OPENAI_BASE_URL="http://localhost:8080/openai/v1"
+export ENVBASIS_API_URL=http://127.0.0.1:8000/api/v1
+export ENVBASIS_PROXY_URL=http://localhost:8080
+export ENVBASIS_CLIENT_ID=envb_mi_...
+export ENVBASIS_CLIENT_SECRET=envb_mis_...
 ```
 
 ```python
-from openai import OpenAI
+import envbasis_session
+envbasis_session.configure()
 
-client = OpenAI()
-response = client.responses.create(
-    model="gpt-5.6-terra",
-    input="Explain envelope encryption concisely.",
+from openai import OpenAI
+client = OpenAI(
+    api_key=envbasis_session.api_key,
+    base_url=envbasis_session.openai_base_url,
 )
 ```
+
+## OpenAI integration
 
 Supported OpenAI operations:
 
 - `POST /openai/v1/responses`
 - `GET /openai/v1/responses/{response_id}`
 - `POST /openai/v1/responses/{response_id}/cancel`
+- `POST /openai/v1/chat/completions`
 - `GET /openai/v1/models`
 - `POST /openai/v1/embeddings`
 
@@ -97,9 +89,9 @@ The initial catalog covers repository, contents, issues, pull requests, commits,
 
 Deploy the proxy separately from agent workloads. Agents should reach the proxy listener but must not have shell, filesystem, deployment, or environment access to the proxy process.
 
-The current proxy validates JWT signature and expiry locally. Disabling or rotating a machine identity stops new token issuance, but an already-issued token remains usable until its short expiry. Online introspection and immediate revocation are planned control-plane integrations.
+The current proxy validates JWT signature and expiry locally. Disabling or rotating a machine identity stops new token issuance, but an already-issued token remains usable until its short expiry.
 
-Provider keys are supplied as proxy deployment secrets in this version. A later internal control-plane credential channel can fetch EnvBasis-stored keys without changing the agent-facing API.
+Provider keys are stored encrypted in the console per project environment. The proxy resolves them through `POST /api/v1/internal/proxy/credentials/resolve` using `PROXY_SERVICE_TOKEN`. Env-var fallback (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) is only for tests when `CONTROL_PLANE_URL` is unset.
 
 ## Test
 
