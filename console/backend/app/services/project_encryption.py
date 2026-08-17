@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.environment import Environment
 from app.models.project import Project
 from app.models.project_encryption_key import ProjectEncryptionKey
+from app.models.provider_credential import ProviderCredential
 from app.models.secret import Secret
 from app.services.crypto import (
     decrypt_secret_value,
@@ -176,6 +177,23 @@ def rotate_project_encryption_key(
         )
         secret.encrypted_value = encrypt_with_data_key(plaintext, new_data_key)
         secret.encryption_key_version = next_version
+
+    provider_rows = list(
+        db.scalars(
+            select(ProviderCredential)
+            .where(ProviderCredential.project_id == project_id)
+            .order_by(ProviderCredential.id.asc())
+        ).all()
+    )
+    for credential in provider_rows:
+        plaintext = decrypt_project_secret(
+            db,
+            project_id=project_id,
+            encrypted_value=credential.encrypted_secret,
+            encryption_key_version=credential.encryption_key_version,
+        )
+        credential.encrypted_secret = encrypt_with_data_key(plaintext, new_data_key)
+        credential.encryption_key_version = next_version
 
     rotated_at = datetime.now(timezone.utc)
     if previous_key is not None:
