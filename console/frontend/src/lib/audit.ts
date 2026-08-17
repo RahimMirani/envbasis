@@ -35,6 +35,8 @@ const actionLabels: Record<string, string> = {
   'machine_identity.revoked': 'revoked a machine identity',
   'machine_identity.authenticated': 'authenticated a machine identity',
   'machine_identity.secrets_accessed': 'fetched machine-scoped secrets',
+  'provider_credential.upserted': 'saved a provider key',
+  'provider_credential.deleted': 'removed a provider key',
   'webhook.created': 'created a webhook',
   'webhook.test_sent': 'queued a webhook test',
   'webhook.redelivery_requested': 'requested webhook redelivery',
@@ -83,6 +85,8 @@ const actionColors: Record<string, string> = {
   'machine_identity.revoked': 'danger',
   'machine_identity.authenticated': 'success',
   'machine_identity.secrets_accessed': 'info',
+  'provider_credential.upserted': 'accent',
+  'provider_credential.deleted': 'danger',
   'webhook.created': 'success',
   'webhook.test_sent': 'info',
   'webhook.redelivery_requested': 'warning',
@@ -131,6 +135,8 @@ const actionIcons: Record<string, string> = {
   'machine_identity.revoked': 'revoke',
   'machine_identity.authenticated': 'activity',
   'machine_identity.secrets_accessed': 'pull',
+  'provider_credential.upserted': 'key',
+  'provider_credential.deleted': 'key',
   'webhook.created': 'activity',
   'webhook.test_sent': 'activity',
   'webhook.redelivery_requested': 'activity',
@@ -204,6 +210,10 @@ export function getAuditDetails(log: AuditLog): string | null {
 
   if (typeof metadata.secret_count === 'number') {
     return `${metadata.secret_count} scoped secret${metadata.secret_count === 1 ? '' : 's'}`;
+  }
+
+  if (typeof metadata.provider === 'string') {
+    return `Provider: ${metadata.provider}`;
   }
 
   if (typeof metadata.url === 'string') {
