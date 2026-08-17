@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   ShieldOff,
 } from 'lucide-react';
+import Checkbox from '../components/Checkbox';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import SectionLoader from '../components/SectionLoader';
@@ -383,7 +384,8 @@ export default function MachineIdentitiesPage() {
   const [rotationError, setRotationError] = useState<string | null>(null);
   const [isRotating, setIsRotating] = useState(false);
 
-  const [identityPendingRevoke, setIdentityPendingRevoke] = useState<MachineIdentity | null>(null);
+  const [selectedIdentityIds, setSelectedIdentityIds] = useState<string[]>([]);
+  const [showBulkRevokeConfirm, setShowBulkRevokeConfirm] = useState(false);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
   const [credentialIdentity, setCredentialIdentity] = useState<MachineIdentity | null>(null);
@@ -642,27 +644,47 @@ export default function MachineIdentitiesPage() {
     }
   };
 
-  const handleRevoke = async () => {
-    if (!identityPendingRevoke) {
-      return;
-    }
+  const selectableIdentityIds = identities
+    .filter((identity) => getIdentityStatus(identity) !== 'revoked')
+    .map((identity) => identity.id);
 
+  const toggleIdentitySelection = (identityId: string) => {
+    setSelectedIdentityIds((current) =>
+      current.includes(identityId)
+        ? current.filter((id) => id !== identityId)
+        : [...current, identityId]
+    );
+  };
+
+  const toggleSelectAllIdentities = () => {
+    setSelectedIdentityIds((current) =>
+      selectableIdentityIds.every((id) => current.includes(id)) ? [] : selectableIdentityIds
+    );
+  };
+
+  const handleBulkRevoke = async () => {
     setIsRevoking(true);
     setRevokeError(null);
-    try {
-      const revoked = await revokeMachineIdentity(
-        currentProject.id,
-        identityPendingRevoke.id,
-        accessToken!
-      );
-      setIdentities((current) =>
-        current.map((identity) => (identity.id === revoked.id ? revoked : identity))
-      );
-      setIdentityPendingRevoke(null);
-    } catch (revokeFailure) {
-      setRevokeError((revokeFailure as Error).message || 'Failed to revoke machine identity.');
-    } finally {
-      setIsRevoking(false);
+    const failedNames: string[] = [];
+    const succeededIds: string[] = [];
+    for (const identityId of selectedIdentityIds) {
+      try {
+        const revoked = await revokeMachineIdentity(currentProject.id, identityId, accessToken!);
+        succeededIds.push(identityId);
+        setIdentities((current) =>
+          current.map((identity) => (identity.id === revoked.id ? revoked : identity))
+        );
+      } catch {
+        const identity = identities.find((item) => item.id === identityId);
+        failedNames.push(identity?.name ?? identityId);
+      }
+    }
+    setIsRevoking(false);
+    setSelectedIdentityIds((current) => current.filter((id) => !succeededIds.includes(id)));
+    if (failedNames.length) {
+      setRevokeError(`Failed to revoke: ${failedNames.join(', ')}.`);
+    } else {
+      setShowBulkRevokeConfirm(false);
     }
   };
 
@@ -677,6 +699,18 @@ export default function MachineIdentitiesPage() {
           </p>
         </div>
         <div className="page-header-actions">
+          {selectedIdentityIds.length > 0 && (
+            <button
+              className="btn btn-danger"
+              onClick={() => {
+                setRevokeError(null);
+                setShowBulkRevokeConfirm(true);
+              }}
+            >
+              <ShieldOff size={14} />
+              Revoke Selected ({selectedIdentityIds.length})
+            </button>
+          )}
           <button
             className="btn btn-secondary"
             onClick={() => void loadIdentities(true)}
@@ -720,6 +754,21 @@ export default function MachineIdentitiesPage() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 40 }}>
+                    <Checkbox
+                      checked={
+                        selectableIdentityIds.length > 0 &&
+                        selectableIdentityIds.every((id) => selectedIdentityIds.includes(id))
+                      }
+                      indeterminate={
+                        selectedIdentityIds.length > 0 &&
+                        !selectableIdentityIds.every((id) => selectedIdentityIds.includes(id))
+                      }
+                      onChange={toggleSelectAllIdentities}
+                      aria-label="Select all machine identities"
+                      disabled={selectableIdentityIds.length === 0 || isRevoking}
+                    />
+                  </th>
                   <th>Name</th>
                   <th>Status</th>
                   <th>Environment</th>
@@ -737,6 +786,14 @@ export default function MachineIdentitiesPage() {
 
                   return (
                     <tr key={identity.id}>
+                      <td className="table-checkbox-cell">
+                        <Checkbox
+                          checked={selectedIdentityIds.includes(identity.id)}
+                          onChange={() => toggleIdentitySelection(identity.id)}
+                          aria-label={`Select ${identity.name}`}
+                          disabled={status === 'revoked' || isRevoking}
+                        />
+                      </td>
                       <td>
                         <div className="machine-list-name">{identity.name}</div>
                         <code className="machine-client-id">{identity.client_id}</code>
@@ -779,15 +836,6 @@ export default function MachineIdentitiesPage() {
         onClose={() => setDetailsIdentityId(null)}
         title={detailsIdentity?.name ?? 'Identity details'}
         size="wide"
-        footer={
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setDetailsIdentityId(null)}
-          >
-            Close
-          </button>
-        }
       >
         {detailsIdentity
           ? (() => {
@@ -821,7 +869,10 @@ export default function MachineIdentitiesPage() {
                         <KeyRound size={12} />
                         Add credential
                       </button>
-                      <button className="btn btn-secondary btn-sm" onClick={() => openRotate(detailsIdentity)}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => openRotate(detailsIdentity)}
+                      >
                         <RotateCw size={12} />
                         Rotate
                       </button>
@@ -848,16 +899,6 @@ export default function MachineIdentitiesPage() {
                       ) : null}
                       <button className="btn btn-secondary btn-sm" onClick={() => void openHistory(detailsIdentity)}>
                         <History size={12} /> History
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm btn-danger-ghost"
-                        onClick={() => {
-                          setRevokeError(null);
-                          setIdentityPendingRevoke(detailsIdentity);
-                        }}
-                      >
-                        <ShieldOff size={12} />
-                        Revoke
                       </button>
                     </div>
                   ) : null}
@@ -908,7 +949,7 @@ export default function MachineIdentitiesPage() {
                             : item.overlap_expires_at
                               ? `Overlap until ${formatDate(item.overlap_expires_at)}`
                               : 'Active'}
-                          {!item.revoked_at ? (
+                          {!item.revoked_at && detailsIdentity.credentials.length > 1 ? (
                             <>
                               <button
                                 className="btn btn-ghost btn-sm"
@@ -1108,19 +1149,22 @@ export default function MachineIdentitiesPage() {
       />
 
       <ConfirmDialog
-        isOpen={Boolean(identityPendingRevoke)}
-        title="Revoke Machine Identity"
-        description={
-          identityPendingRevoke
-            ? `Revoke “${identityPendingRevoke.name}”? Its client secret and all issued access tokens will stop working immediately.`
-            : ''
+        isOpen={showBulkRevokeConfirm}
+        title={
+          selectedIdentityIds.length === 1
+            ? 'Revoke Machine Identity'
+            : 'Revoke Machine Identities'
         }
+        description={`Revoke ${selectedIdentityIds.length} selected identit${
+          selectedIdentityIds.length === 1 ? 'y' : 'ies'
+        }? Their client secrets and all issued access tokens will stop working immediately.`}
         errorMessage={revokeError}
-        confirmLabel="Revoke Identity"
-        onConfirm={() => void handleRevoke()}
+        confirmLabel="Revoke Selected"
+        tone="danger"
+        onConfirm={() => void handleBulkRevoke()}
         onClose={() => {
           if (!isRevoking) {
-            setIdentityPendingRevoke(null);
+            setShowBulkRevokeConfirm(false);
             setRevokeError(null);
           }
         }}
