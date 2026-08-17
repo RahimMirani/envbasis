@@ -3,6 +3,8 @@ from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import Headers
+from starlette.responses import Response
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.api.router import api_router
@@ -24,6 +26,33 @@ from app.services.crypto import ensure_secrets_master_key_configured
 from app.services.api_idempotency import execute_idempotent_request
 
 logger = logging.getLogger(__name__)
+
+_LOCAL_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
+
+
+def _cors_allow_origins(origins: list[str]) -> list[str]:
+    aliases: list[str] = []
+    for origin in origins:
+        if "://localhost" in origin:
+            aliases.append(origin.replace("://localhost", "://127.0.0.1", 1))
+        elif "://127.0.0.1" in origin:
+            aliases.append(origin.replace("://127.0.0.1", "://localhost", 1))
+    return list(dict.fromkeys([*origins, *aliases]))
+
+
+class LoggedCORSMiddleware(CORSMiddleware):
+    def preflight_response(self, request_headers: Headers) -> Response:
+        response = super().preflight_response(request_headers)
+        if response.status_code >= 400:
+            logger.warning(
+                "cors_preflight_rejected origin=%s method=%s headers=%s private_network=%s body=%s",
+                request_headers.get("origin"),
+                request_headers.get("access-control-request-method"),
+                request_headers.get("access-control-request-headers"),
+                request_headers.get("access-control-request-private-network"),
+                bytes(getattr(response, "body", b"")).decode("utf-8", errors="replace"),
+            )
+        return response
 
 
 def create_app() -> FastAPI:
@@ -84,11 +113,12 @@ def create_app() -> FastAPI:
 
     if settings.cors_allowed_origins:
         app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.cors_allowed_origins,
+            LoggedCORSMiddleware,
+            allow_origins=_cors_allow_origins(settings.cors_allowed_origins),
+            allow_origin_regex=_LOCAL_ORIGIN_REGEX,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
+            allow_methods=["*"],
+            allow_headers=["*"],
             expose_headers=[
                 "Deprecation",
                 "Idempotency-Replayed",
@@ -100,6 +130,7 @@ def create_app() -> FastAPI:
                 "X-Request-ID",
                 "X-Total-Count",
             ],
+            allow_private_network=True,
         )
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
