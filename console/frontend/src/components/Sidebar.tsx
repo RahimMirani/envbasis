@@ -13,7 +13,7 @@ import {
   ChevronDown,
   LayoutDashboard,
   KeyRound,
-  GitBranch,
+  Lock,
   Users,
   Ticket,
   Settings,
@@ -50,6 +50,15 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
+interface SidebarNavLink {
+  to: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  locked?: boolean;
+  ownerOnly?: boolean;
+  child?: boolean;
+}
+
 function getProjectInitials(name: string): string {
   const parts = name.trim().split(/[\s._-]+/).filter(Boolean);
 
@@ -76,15 +85,19 @@ export default function Sidebar({
   const { currentUser, authUser, signOut } = useAuth();
   const user = currentUser ?? authUser;
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+  const [isSecretsGroupOpen, setIsSecretsGroupOpen] = useState(true);
   const [projectSearch, setProjectSearch] = useState('');
   const [discoveryState, setDiscoveryState] = useState(() => getProjectDiscoveryState());
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const links = [
+  const topLinks: SidebarNavLink[] = [
     { to: `${basePath}/overview`, icon: LayoutDashboard, label: 'Overview' },
-    { to: `${basePath}/secrets`, icon: KeyRound, label: 'Secrets' },
-    { to: `${basePath}/provider-keys`, icon: PlugZap, label: 'Provider keys' },
-    { to: `${basePath}/environments`, icon: GitBranch, label: 'Environments' },
+  ];
+  const secretsLinks: SidebarNavLink[] = [
+    { to: `${basePath}/secrets`, icon: KeyRound, label: 'Secrets', child: true },
+    { to: `${basePath}/provider-keys`, icon: PlugZap, label: 'Proxy secrets', child: true },
+  ];
+  const bottomLinks: SidebarNavLink[] = [
     { to: `${basePath}/team`, icon: Users, label: 'Team' },
     {
       to: `${basePath}/machine-identities`,
@@ -96,6 +109,7 @@ export default function Sidebar({
     { to: `${basePath}/governance`, icon: ShieldCheck, label: 'Access & Approvals' },
     { to: `${basePath}/settings`, icon: Settings, label: 'Settings', ownerOnly: true },
   ];
+  const isSecretsRouteActive = secretsLinks.some((link) => location.pathname.startsWith(link.to));
 
   const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
   const visibleProjects = useMemo(
@@ -151,7 +165,7 @@ export default function Sidebar({
     setProjectSearch('');
     setDiscoveryState(markProjectVisited(project.id));
     if (onClose) onClose();
-    navigate(`/projects/${project.id}/overview`);
+    navigate(`/projects/${project.id}/environments`);
   };
 
   const handleTogglePinnedProject = (event: ReactMouseEvent, projectId: string) => {
@@ -171,6 +185,58 @@ export default function Sidebar({
 
   const handleNavClick = () => {
     if (onClose) onClose();
+  };
+
+  const renderNavLink = (link: SidebarNavLink) => {
+    const isLocked = (Boolean(link.ownerOnly) && projectRole !== 'owner') || Boolean(link.locked);
+    const sublinkClass = link.child ? ' sidebar-sublink' : '';
+
+    if (isLocked) {
+      return (
+        <OwnerOnlyHint
+          key={link.to}
+          message={
+            link.ownerOnly
+              ? `${link.label} is available to project owners only.`
+              : `${link.label} is not enabled for members in this project.`
+          }
+          className="sidebar-owner-only-hint"
+        >
+          <button
+            type="button"
+            className={`sidebar-link sidebar-link-locked${sublinkClass} ${
+              location.pathname === link.to ? 'sidebar-link-active' : ''
+            }`}
+            aria-disabled="true"
+            tabIndex={-1}
+          >
+            <span className="sidebar-link-content">
+              <link.icon size={16} className="sidebar-link-icon" />
+              <span>{link.label}</span>
+            </span>
+            <span className="owner-only-chip owner-only-chip-sidebar">
+              {link.ownerOnly ? 'Owner only' : 'Restricted'}
+            </span>
+          </button>
+        </OwnerOnlyHint>
+      );
+    }
+
+    return (
+      <NavLink
+        key={link.to}
+        to={link.to}
+        className={({ isActive }) =>
+          `sidebar-link${sublinkClass} ${isActive ? 'sidebar-link-active' : ''}`
+        }
+        onClick={handleNavClick}
+      >
+        <span className="sidebar-link-content">
+          <link.icon size={16} className="sidebar-link-icon" />
+          <span>{link.label}</span>
+        </span>
+      </NavLink>
+    );
   };
 
   return (
@@ -265,55 +331,30 @@ export default function Sidebar({
       </div>
 
       <nav className="sidebar-nav">
-        {links.map((link) => {
-          const isLocked =
-            (Boolean(link.ownerOnly) && projectRole !== 'owner') || Boolean(link.locked);
-
-          if (isLocked) {
-            return (
-              <OwnerOnlyHint
-                key={link.to}
-                message={
-                  link.ownerOnly
-                    ? `${link.label} is available to project owners only.`
-                    : `${link.label} is not enabled for members in this project.`
-                }
-                className="sidebar-owner-only-hint"
-              >
-                <button
-                  type="button"
-                  className={`sidebar-link sidebar-link-locked ${
-                    location.pathname === link.to ? 'sidebar-link-active' : ''
-                  }`}
-                  aria-disabled="true"
-                  tabIndex={-1}
-                >
-                  <span className="sidebar-link-content">
-                    <link.icon size={16} className="sidebar-link-icon" />
-                    <span>{link.label}</span>
-                  </span>
-                  <span className="owner-only-chip owner-only-chip-sidebar">
-                    {link.ownerOnly ? 'Owner only' : 'Restricted'}
-                  </span>
-                </button>
-              </OwnerOnlyHint>
-            );
-          }
-
-          return (
-            <NavLink
-              key={link.to}
-              to={link.to}
-              className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="sidebar-link-content">
-                <link.icon size={16} className="sidebar-link-icon" />
-                <span>{link.label}</span>
-              </span>
-            </NavLink>
-          );
-        })}
+        {topLinks.map(renderNavLink)}
+        <button
+          type="button"
+          className={`sidebar-link sidebar-group-toggle ${
+            !isSecretsGroupOpen && isSecretsRouteActive ? 'sidebar-link-active' : ''
+          }`}
+          onClick={() => setIsSecretsGroupOpen((current) => !current)}
+          aria-expanded={isSecretsGroupOpen}
+        >
+          <span className="sidebar-link-content">
+            <Lock size={16} className="sidebar-link-icon" />
+            <span>Manage Secrets</span>
+          </span>
+          <ChevronDown
+            size={14}
+            className={`sidebar-group-chevron ${isSecretsGroupOpen ? 'is-open' : ''}`}
+          />
+        </button>
+        <div className={`sidebar-group-links ${isSecretsGroupOpen ? 'is-open' : 'is-closed'}`}>
+          <div className="sidebar-group-links-inner" inert={!isSecretsGroupOpen}>
+            {secretsLinks.map(renderNavLink)}
+          </div>
+        </div>
+        {bottomLinks.map(renderNavLink)}
       </nav>
 
       <div className="sidebar-bottom">
