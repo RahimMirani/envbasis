@@ -13,6 +13,8 @@ Machine identities are the backend replacement for long-lived runtime tokens. A 
 
 The client credential may be long-lived or have an administrator-selected expiry. The access token is deliberately short-lived; its lifetime is configurable per identity within the operator-defined minimum and maximum.
 
+Agents should store only the client ID and client secret. Copy [`docs/snippets/envbasis_session.py`](snippets/envbasis_session.py) into the agent and call `envbasis_session.configure()` at startup. That helper exchanges credentials for a JWT and refreshes it before expiry so operators never mint tokens by hand.
+
 ## Scopes
 
 Project identities have a fixed project and environment. Organization identities can be reused across projects in their organization, but receive no access until they are assigned a role in each project. Every identity can also be restricted by:
