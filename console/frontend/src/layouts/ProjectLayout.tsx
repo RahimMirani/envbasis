@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Outlet, useNavigate, useParams } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import TopBar from '../components/TopBar';
 import Sidebar from '../components/Sidebar';
 import SectionLoader from '../components/SectionLoader';
@@ -14,9 +14,35 @@ import { createProjectPageCache } from '../lib/projectPageCache';
 import { markProjectVisited } from '../lib/projectDiscovery';
 import type { Project, Environment, SecretStats } from '../types/api';
 
+const ENV_CHOICE_STORAGE_PREFIX = 'envbasis:project-env:';
+
+function readStoredEnvChoice(projectId: string | undefined): string | null {
+  if (!projectId) {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(`${ENV_CHOICE_STORAGE_PREFIX}${projectId}`);
+  } catch {
+    return null;
+  }
+}
+
+function storeEnvChoice(projectId: string | undefined, env: string): void {
+  if (!projectId) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(`${ENV_CHOICE_STORAGE_PREFIX}${projectId}`, env);
+  } catch {
+    // Ignore storage failures — the prompt will simply show again next visit.
+  }
+}
+
 export default function ProjectLayout() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isEnvironmentSelection = location.pathname.endsWith('/environments');
   const { accessToken, apiConfigError } = useAuth();
 
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -24,7 +50,7 @@ export default function ProjectLayout() {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [secretStats, setSecretStats] = useState<SecretStats | null>(null);
   const [isSecretStatsLoading, setIsSecretStatsLoading] = useState(true);
-  const [currentEnv, setCurrentEnv] = useState('all');
+  const [currentEnv, setCurrentEnv] = useState(() => readStoredEnvChoice(projectId) ?? 'all');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -36,7 +62,16 @@ export default function ProjectLayout() {
   useEffect(() => {
     pageCacheRef.current.clear();
     setSidebarOpen(false);
+    setCurrentEnv(readStoredEnvChoice(projectId) ?? 'all');
   }, [projectId]);
+
+  const handleEnvChange = useCallback(
+    (env: string) => {
+      setCurrentEnv(env);
+      storeEnvChoice(projectId, env);
+    },
+    [projectId]
+  );
 
   useEffect(() => {
     if (!accessToken || !projectId) {
@@ -331,27 +366,32 @@ export default function ProjectLayout() {
         projectName={currentProject.name}
         environments={environments}
         currentEnv={currentEnv}
-        onEnvChange={setCurrentEnv}
-        onMenuOpen={() => setSidebarOpen(true)}
+        onEnvChange={handleEnvChange}
+        onMenuOpen={isEnvironmentSelection ? undefined : () => setSidebarOpen(true)}
+        fullWidth={isEnvironmentSelection}
       />
-      <div className="project-layout-body">
-        <button
-          type="button"
-          className={`sidebar-backdrop${sidebarOpen ? ' sidebar-open' : ''}`}
-          onClick={() => setSidebarOpen(false)}
-          aria-label="Close sidebar"
-        />
-        <Sidebar
-          basePath={projectBasePath}
-          projectName={currentProject.name}
-          projectRole={currentProject.role}
-          canViewAuditLogs={currentProject.can_view_audit_logs}
-          canManageMachineIdentities={currentProject.can_manage_runtime_tokens}
-          currentProjectId={currentProject.id}
-          projects={projects}
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-        />
+      <div className={`project-layout-body${isEnvironmentSelection ? ' project-layout-body-full' : ''}`}>
+        {!isEnvironmentSelection && (
+          <>
+            <button
+              type="button"
+              className={`sidebar-backdrop${sidebarOpen ? ' sidebar-open' : ''}`}
+              onClick={() => setSidebarOpen(false)}
+              aria-label="Close sidebar"
+            />
+            <Sidebar
+              basePath={projectBasePath}
+              projectName={currentProject.name}
+              projectRole={currentProject.role}
+              canViewAuditLogs={currentProject.can_view_audit_logs}
+              canManageMachineIdentities={currentProject.can_manage_runtime_tokens}
+              currentProjectId={currentProject.id}
+              projects={projects}
+              open={sidebarOpen}
+              onClose={() => setSidebarOpen(false)}
+            />
+          </>
+        )}
         <main className="project-layout-main">
           <Outlet
             context={{
@@ -359,6 +399,7 @@ export default function ProjectLayout() {
               projectBasePath,
               environments,
               currentEnv,
+              onEnvChange: handleEnvChange,
               canManageProject,
               secretStats,
               isSecretStatsLoading,
