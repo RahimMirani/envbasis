@@ -24,6 +24,9 @@ import type {
   AuditLog,
   UnifiedAuditLogListResponse,
   SecretStats,
+  ProviderCredential,
+  ProviderCredentialListResponse,
+  ProviderName,
   Webhook,
   WebhookDelivery,
   CliAuthRequest,
@@ -1356,4 +1359,42 @@ export function simulatePermission(projectId: string, accessToken: string, body:
 
 export function createApprovalRequest(projectId: string, accessToken: string, body: { environment_id: string; path: string; secret_key: string; operation: 'create' | 'update' | 'delete'; value?: string; metadata?: Record<string, unknown>; comment?: string }): Promise<ApprovalRequest> {
   return apiRequest(`/projects/${encodePathSegment(projectId)}/approval-requests`, { method: 'POST', accessToken, body });
+}
+
+export function listProviderCredentials(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<ProviderCredentialListResponse> {
+  return apiRequest<ProviderCredentialListResponse>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/provider-credentials`,
+    { ...options, accessToken }
+  );
+}
+
+export function upsertProviderCredential(
+  projectId: string,
+  environmentId: string,
+  accessToken: string,
+  body: { provider: ProviderName; secret: string },
+  options: RequestOptions = {}
+): Promise<ProviderCredential> {
+  return apiRequest<ProviderCredential>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/provider-credentials`,
+    { ...options, method: 'PUT', accessToken, body }
+  );
+}
+
+export function deleteProviderCredential(
+  projectId: string,
+  environmentId: string,
+  provider: ProviderName,
+  accessToken: string,
+  options: RequestOptions = {}
+): Promise<{ detail: string }> {
+  return apiRequest<{ detail: string }>(
+    `/projects/${encodePathSegment(projectId)}/environments/${encodePathSegment(environmentId)}/provider-credentials/${encodePathSegment(provider)}`,
+    { ...options, method: 'DELETE', accessToken }
+  );
 }
