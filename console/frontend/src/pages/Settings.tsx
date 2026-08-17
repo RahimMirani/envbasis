@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import ConfirmDialog from '../components/ConfirmDialog';
 import OwnerOnlyHint from '../components/OwnerOnlyHint';
+import Select from '../components/Select';
 import { deleteProject, updateProject } from '../lib/api';
 import type { Project } from '../types/api';
 
@@ -139,19 +140,19 @@ export default function SettingsPage() {
           </p>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="audit-log-visibility-select">Visibility</label>
-            <select
+            <Select
               id="audit-log-visibility-select"
-              className="input select"
               value={auditLogVisibility}
-              onChange={(event) =>
-                setAuditLogVisibility(event.target.value as 'owner_only' | 'members' | 'specific')
+              onChange={(next) =>
+                setAuditLogVisibility(next as 'owner_only' | 'members' | 'specific')
               }
               disabled={!canManageProject || isSaving || isDeleting}
-            >
-              <option value="owner_only">Owner only</option>
-              <option value="members">All members</option>
-              <option value="specific">Specific members</option>
-            </select>
+              options={[
+                { value: 'owner_only', label: 'Owner only' },
+                { value: 'members', label: 'All members' },
+                { value: 'specific', label: 'Specific members' },
+              ]}
+            />
           </div>
         </div>
       </div>
