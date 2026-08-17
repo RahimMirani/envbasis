@@ -1668,6 +1668,7 @@ export default function SecretsPage() {
         footer={
           <>
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={closeExportModal}
               disabled={isExporting}
@@ -1675,6 +1676,7 @@ export default function SecretsPage() {
               Cancel
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={handleExportSecrets}
               disabled={isExporting}
@@ -1722,6 +1724,7 @@ export default function SecretsPage() {
         footer={
           <>
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={closeUploadModal}
               disabled={isUploading}
@@ -1729,6 +1732,7 @@ export default function SecretsPage() {
               Cancel
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={handleUploadSecrets}
               disabled={isUploading}
@@ -1807,6 +1811,7 @@ export default function SecretsPage() {
         footer={
           <>
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={closeSecretModal}
               disabled={isSubmitting}
@@ -1814,6 +1819,7 @@ export default function SecretsPage() {
               Cancel
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={handleSaveSecret}
               id="save-secret-btn"
