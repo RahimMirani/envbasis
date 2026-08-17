@@ -788,16 +788,43 @@ tbody tr:last-child td { border-bottom: none; }
   margin: var(--space-3) 0 var(--space-1); color: var(--text-primary); font-size: var(--text-md);
 }
 .governance-empty p { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
-.governance-recovery-result {
-  margin-top: var(--space-5); padding-top: var(--space-4);
-  border-top: 1px solid var(--border-light);
+.governance-role-preview {
+  margin: var(--space-4) 0 0; padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(255,255,255,0.02);
+  color: var(--text-secondary); font-size: var(--text-sm);
 }
-.governance-recovery-result p { margin: 6px 0 0; }
+.governance-role-card {
+  display: grid; gap: var(--space-3); padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.governance-role-card:last-child { border-bottom: 0; padding-bottom: 0; }
+.governance-role-card:first-child { padding-top: 0; }
+.governance-role-members { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.governance-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid var(--border-light); border-radius: var(--radius-full);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-secondary); font-size: 12px;
+}
+.governance-chip button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent;
+  color: var(--text-tertiary); cursor: pointer;
+}
+.governance-chip button:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+.governance-chip button:disabled { cursor: not-allowed; opacity: 0.5; }
+.governance-role-assign { display: flex; align-items: center; gap: var(--space-2); }
+.governance-role-assign .ui-select-trigger { max-width: 300px; }
 @media (max-width: 720px) {
   .governance-form-grid { grid-template-columns: 1fr; }
   .governance-request { flex-direction: column; }
   .governance-actions { justify-content: flex-start; }
   .governance-inline-field { flex-direction: column; align-items: stretch; }
+  .governance-role-assign { flex-direction: column; align-items: stretch; }
+  .governance-role-assign .ui-select-trigger { max-width: none; }
 }
 .global-sidebar-section-label {
   font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
