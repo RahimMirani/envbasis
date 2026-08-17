@@ -10,6 +10,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Bell, Plus, GitBranch, Users, Clock, TerminalSquare, Search, Star } from 'lucide-react';
 import Modal from '../components/Modal';
 import DashboardLoader from '../components/DashboardLoader';
+import Select from '../components/Select';
 import { useAuth } from '../auth/useAuth';
 import {
   acceptInvitation,
@@ -211,7 +212,7 @@ export default function ProjectsPage() {
       setName('');
       setDescription('');
       setSubmitError(null);
-      navigate(`/projects/${project.id}/overview`);
+      navigate(`/projects/${project.id}/environments`);
     } catch (createError) {
       setSubmitError((createError as Error).message || 'Failed to create project.');
     } finally {
@@ -238,7 +239,7 @@ export default function ProjectsPage() {
       setInviteModal(null);
       setNotifOpen(false);
       await refreshInvitations();
-      navigate(`/projects/${inviteModal.project_id}/overview`);
+      navigate(`/projects/${inviteModal.project_id}/environments`);
     } catch (e) {
       setInviteActionError(e instanceof ApiError ? e.message : 'Accept failed.');
     } finally {
@@ -407,18 +408,17 @@ export default function ProjectsPage() {
                 aria-label="Search projects"
               />
             </div>
-            <select
-              className="input select projects-sort-select"
+            <Select
+              className="projects-sort-select"
               value={projectSort}
-              onChange={(event) =>
-                setProjectSort(event.target.value as 'recent' | 'name' | 'created')
-              }
-              aria-label="Sort projects"
-            >
-              <option value="recent">Recent</option>
-              <option value="name">Name</option>
-              <option value="created">Newest first</option>
-            </select>
+              onChange={(next) => setProjectSort(next as 'recent' | 'name' | 'created')}
+              ariaLabel="Sort projects"
+              options={[
+                { value: 'recent', label: 'Recent' },
+                { value: 'name', label: 'Name' },
+                { value: 'created', label: 'Newest first' },
+              ]}
+            />
             <div className="projects-discovery-meta">
               <span>
                 {visibleProjects.length} of {projects.length} projects
@@ -441,7 +441,7 @@ export default function ProjectsPage() {
                 return (
                   <Link
                     key={project.id}
-                    to={`/projects/${project.id}/overview`}
+                    to={`/projects/${project.id}/environments`}
                     className="project-card glow-effect"
                     style={{ '--animation-order': i } as CSSProperties}
                     onClick={() => handleOpenProject(project.id)}
