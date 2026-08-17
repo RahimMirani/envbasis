@@ -21,6 +21,7 @@ from app.models.machine_identity_credential import MachineIdentityCredential
 
 
 MACHINE_SECRET_READ_ACTION = "secrets:read"
+MACHINE_PROXY_USE_ACTION = "proxy:use"
 
 
 @dataclass(frozen=True)
