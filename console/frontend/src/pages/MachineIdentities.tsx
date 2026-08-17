@@ -396,11 +396,15 @@ export default function MachineIdentitiesPage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [statusActionId, setStatusActionId] = useState<string | null>(null);
+  const [detailsIdentityId, setDetailsIdentityId] = useState<string | null>(null);
 
   const environmentById = useMemo(
     () => new Map(environments.map((environment) => [environment.id, environment.name])),
     [environments]
   );
+  const detailsIdentity = detailsIdentityId
+    ? identities.find((identity) => identity.id === detailsIdentityId) ?? null
+    : null;
 
   const loadIdentities = async (showSpinner = false, signal?: AbortSignal) => {
     if (!accessToken || !canManageMachineIdentities) {
@@ -711,35 +715,104 @@ export default function MachineIdentitiesPage() {
           )}
         </div>
       ) : (
-        <div className="machine-identity-grid">
-          {identities.map((identity) => {
-            const status = getIdentityStatus(identity);
-            const environmentName = identity.organization_id
-              ? 'Selected per request'
-              : environmentById.get(identity.environment_id ?? '') ?? 'Unknown';
+        <div className="card">
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Environment</th>
+                  <th>Token lifetime</th>
+                  <th>Last used</th>
+                  <th style={{ width: 90 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {identities.map((identity) => {
+                  const status = getIdentityStatus(identity);
+                  const environmentName = identity.organization_id
+                    ? 'Selected per request'
+                    : environmentById.get(identity.environment_id ?? '') ?? 'Unknown';
 
-            return (
-              <article className="card machine-identity-card" key={identity.id}>
-                <div className="machine-identity-header">
-                  <div>
-                    <div className="machine-identity-title-row">
-                      <h3>{identity.name}</h3>
-                      <span className={`badge machine-status machine-status-${status}`}>
-                        {status}
-                      </span>
-                    </div>
-                    <code className="machine-client-id">{identity.client_id}</code>
+                  return (
+                    <tr key={identity.id}>
+                      <td>
+                        <div className="machine-list-name">{identity.name}</div>
+                        <code className="machine-client-id">{identity.client_id}</code>
+                      </td>
+                      <td>
+                        <span className={`badge machine-status machine-status-${status}`}>
+                          {status}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="badge badge-neutral">{environmentName}</span>
+                      </td>
+                      <td className="text-secondary">
+                        {formatTokenLifetime(identity.access_token_ttl_seconds)}
+                      </td>
+                      <td className="text-secondary">
+                        {identity.last_used_at
+                          ? formatRelativeTime(identity.last_used_at)
+                          : 'Never'}
+                      </td>
+                      <td>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setDetailsIdentityId(identity.id)}
+                        >
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <Modal
+        isOpen={Boolean(detailsIdentity)}
+        onClose={() => setDetailsIdentityId(null)}
+        title={detailsIdentity?.name ?? 'Identity details'}
+        size="wide"
+        footer={
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setDetailsIdentityId(null)}
+          >
+            Close
+          </button>
+        }
+      >
+        {detailsIdentity
+          ? (() => {
+              const status = getIdentityStatus(detailsIdentity);
+              const environmentName = detailsIdentity.organization_id
+                ? 'Selected per request'
+                : environmentById.get(detailsIdentity.environment_id ?? '') ?? 'Unknown';
+
+              return (
+                <>
+                  <div className="machine-details-status">
+                    <span className={`badge machine-status machine-status-${status}`}>{status}</span>
+                    <code className="machine-client-id">{detailsIdentity.client_id}</code>
                   </div>
+
                   {status !== 'revoked' ? (
-                    <div className="machine-card-actions">
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(identity)}>
+                    <div className="machine-details-actions">
+                      <button className="btn btn-secondary btn-sm" onClick={() => openEdit(detailsIdentity)}>
                         <Pencil size={12} />
                         Edit
                       </button>
                       <button
-                        className="btn btn-ghost btn-sm"
+                        className="btn btn-secondary btn-sm"
                         onClick={() => {
-                          setCredentialIdentity(identity);
+                          setCredentialIdentity(detailsIdentity);
                           setNewCredentialName('default');
                           setNewCredentialExpiry('');
                           setCredentialActionError(null);
@@ -748,31 +821,39 @@ export default function MachineIdentitiesPage() {
                         <KeyRound size={12} />
                         Add credential
                       </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openRotate(identity)}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => openRotate(detailsIdentity)}>
                         <RotateCw size={12} />
                         Rotate
                       </button>
                       <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => void handleIdentityStatus(identity, identity.disabled_at ? 'enable' : 'disable')}
-                        disabled={statusActionId === identity.id}
+                        className="btn btn-secondary btn-sm"
+                        onClick={() =>
+                          void handleIdentityStatus(
+                            detailsIdentity,
+                            detailsIdentity.disabled_at ? 'enable' : 'disable'
+                          )
+                        }
+                        disabled={statusActionId === detailsIdentity.id}
                       >
-                        {identity.disabled_at ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
-                        {identity.disabled_at ? 'Enable' : 'Disable'}
+                        {detailsIdentity.disabled_at ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
+                        {detailsIdentity.disabled_at ? 'Enable' : 'Disable'}
                       </button>
                       {status === 'locked' ? (
-                        <button className="btn btn-ghost btn-sm" onClick={() => void handleIdentityStatus(identity, 'unlock')}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => void handleIdentityStatus(detailsIdentity, 'unlock')}
+                        >
                           <LockOpen size={12} /> Unlock
                         </button>
                       ) : null}
-                      <button className="btn btn-ghost btn-sm" onClick={() => void openHistory(identity)}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => void openHistory(detailsIdentity)}>
                         <History size={12} /> History
                       </button>
                       <button
-                        className="btn btn-ghost btn-sm btn-danger-ghost"
+                        className="btn btn-secondary btn-sm btn-danger-ghost"
                         onClick={() => {
                           setRevokeError(null);
-                          setIdentityPendingRevoke(identity);
+                          setIdentityPendingRevoke(detailsIdentity);
                         }}
                       >
                         <ShieldOff size={12} />
@@ -780,68 +861,79 @@ export default function MachineIdentitiesPage() {
                       </button>
                     </div>
                   ) : null}
-                </div>
 
-                <dl className="machine-identity-details">
-                  <div>
-                    <dt>Environment</dt>
-                    <dd><span className="badge badge-neutral">{environmentName}</span></dd>
-                  </div>
-                  <div>
-                    <dt>Token lifetime</dt>
-                    <dd>{formatTokenLifetime(identity.access_token_ttl_seconds)}</dd>
-                  </div>
-                  <div>
-                    <dt>Credential expiry</dt>
-                    <dd>
-                      {identity.credential_expires_at
-                        ? formatDate(identity.credential_expires_at)
-                        : 'No expiry'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Last authenticated</dt>
-                    <dd title={identity.last_authenticated_at ?? undefined}>
-                      {formatActivityTime(identity.last_authenticated_at)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Last used</dt>
-                    <dd title={identity.last_used_at ?? undefined}>
-                      {formatActivityTime(identity.last_used_at)}
-                    </dd>
-                  </div>
-                </dl>
-                <div className="machine-credentials-list">
-                  <strong>Credentials ({identity.credentials.length})</strong>
-                  {identity.credentials.map((item) => (
-                    <div className="machine-credential-row" key={item.id}>
-                      <span><code>{item.client_id}</code> · {item.name} · v{item.version}</span>
-                      <span>
-                        {item.revoked_at ? 'Revoked' : item.overlap_expires_at ? `Overlap until ${formatDate(item.overlap_expires_at)}` : 'Active'}
-                        {!item.revoked_at ? (
-                          <>
-                            <button className="btn btn-ghost btn-sm" onClick={() => openRotate(identity, item)}>Rotate</button>
-                            <button
-                              className="btn btn-ghost btn-sm btn-danger-ghost"
-                              disabled={statusActionId === item.id}
-                              onClick={() => void handleRevokeCredential(identity, item)}
-                            >Revoke</button>
-                          </>
-                        ) : null}
-                      </span>
+                  <dl className="machine-identity-details">
+                    <div>
+                      <dt>Environment</dt>
+                      <dd><span className="badge badge-neutral">{environmentName}</span></dd>
                     </div>
-                  ))}
-                </div>
-                <div className="machine-identity-footer">
-                  <span>Credential version {identity.credential_version}</span>
-                  <span>Created {formatDate(identity.created_at)}</span>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
+                    <div>
+                      <dt>Token lifetime</dt>
+                      <dd>{formatTokenLifetime(detailsIdentity.access_token_ttl_seconds)}</dd>
+                    </div>
+                    <div>
+                      <dt>Credential expiry</dt>
+                      <dd>
+                        {detailsIdentity.credential_expires_at
+                          ? formatDate(detailsIdentity.credential_expires_at)
+                          : 'No expiry'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Last authenticated</dt>
+                      <dd title={detailsIdentity.last_authenticated_at ?? undefined}>
+                        {formatActivityTime(detailsIdentity.last_authenticated_at)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Last used</dt>
+                      <dd title={detailsIdentity.last_used_at ?? undefined}>
+                        {formatActivityTime(detailsIdentity.last_used_at)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Created</dt>
+                      <dd>{formatDate(detailsIdentity.created_at)}</dd>
+                    </div>
+                  </dl>
+
+                  <div className="machine-credentials-list">
+                    <strong>Credentials ({detailsIdentity.credentials.length})</strong>
+                    {detailsIdentity.credentials.map((item) => (
+                      <div className="machine-credential-row" key={item.id}>
+                        <span><code>{item.client_id}</code> · {item.name} · v{item.version}</span>
+                        <span>
+                          {item.revoked_at
+                            ? 'Revoked'
+                            : item.overlap_expires_at
+                              ? `Overlap until ${formatDate(item.overlap_expires_at)}`
+                              : 'Active'}
+                          {!item.revoked_at ? (
+                            <>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => openRotate(detailsIdentity, item)}
+                              >
+                                Rotate
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-sm btn-danger-ghost"
+                                disabled={statusActionId === item.id}
+                                onClick={() => void handleRevokeCredential(detailsIdentity, item)}
+                              >
+                                Revoke
+                              </button>
+                            </>
+                          ) : null}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()
+          : null}
+      </Modal>
 
       <Modal
         isOpen={showCreate || Boolean(editingIdentity)}
