@@ -34,10 +34,21 @@ export default function ConfirmDialog({
       initialFocusRef={cancelButtonRef}
       footer={
         <>
-          <button ref={cancelButtonRef} className="btn btn-secondary" onClick={onClose} disabled={isBusy}>
+          <button
+            ref={cancelButtonRef}
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+            disabled={isBusy}
+          >
             Cancel
           </button>
-          <button className={`btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}`} onClick={onConfirm} disabled={isBusy}>
+          <button
+            type="button"
+            className={`btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}`}
+            onClick={onConfirm}
+            disabled={isBusy}
+          >
             {isBusy ? 'Working...' : confirmLabel}
           </button>
         </>
