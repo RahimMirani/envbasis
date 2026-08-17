@@ -86,3 +86,4 @@ pnpm-debug.log*
 *.cer
 *.der
 *.jks
+.gstack/
