@@ -54,6 +54,13 @@ def validate_openai_request(request: Request, path: str, body: bytes) -> Validat
             raise invalid_request("This OpenAI operation does not accept a request body.")
         json_body = None
         operation = "models.list"
+    elif method == "POST" and normalized == "v1/chat/completions":
+        json_body = parse_json_body(request, body, required=True)
+        if not isinstance(json_body, dict):
+            raise invalid_request("The OpenAI Chat Completions body must be a JSON object.")
+        _require_nonempty_field(json_body, "model")
+        _require_nonempty_field(json_body, "messages")
+        operation = "chat.completions.create"
     elif method == "POST" and normalized == "v1/embeddings":
         json_body = parse_json_body(request, body, required=True)
         if not isinstance(json_body, dict):
