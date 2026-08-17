@@ -259,10 +259,20 @@ export default function EnvironmentsPage() {
         title="Create Environment"
         footer={
           <>
-            <button className="btn btn-secondary" onClick={closeCreateModal} disabled={isCreating}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={closeCreateModal}
+              disabled={isCreating}
+            >
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={handleCreate} disabled={isCreating}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleCreate}
+              disabled={isCreating}
+            >
               <Plus size={14} />
               {isCreating ? 'Creating...' : 'Create Environment'}
             </button>
@@ -291,10 +301,20 @@ export default function EnvironmentsPage() {
         initialFocusRef={renameInputRef}
         footer={
           <>
-            <button className="btn btn-secondary" onClick={closeRenameModal} disabled={isRenaming}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={closeRenameModal}
+              disabled={isRenaming}
+            >
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={handleRename} disabled={isRenaming}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleRename}
+              disabled={isRenaming}
+            >
               {isRenaming ? 'Saving...' : 'Save'}
             </button>
           </>
