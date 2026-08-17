@@ -63,7 +63,7 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route index element={<Navigate to="overview" replace />} />
+            <Route index element={<Navigate to="environments" replace />} />
             <Route path="overview" element={<OverviewPage />} />
             <Route path="secrets" element={<SecretsPage />} />
             <Route path="provider-keys" element={<ProviderKeysPage />} />
