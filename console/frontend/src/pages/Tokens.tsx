@@ -726,10 +726,16 @@ export default function TokensPage() {
         title="Create Runtime Token"
         footer={
           <>
-            <button className="btn btn-secondary" onClick={closeCreateModal} disabled={isCreating}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={closeCreateModal}
+              disabled={isCreating}
+            >
               Cancel
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={handleCreateToken}
               id="confirm-create-token"
@@ -808,6 +814,7 @@ export default function TokensPage() {
         footer={
           <>
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={closeShareModal}
               disabled={shareState.isSubmitting}
@@ -815,6 +822,7 @@ export default function TokensPage() {
               Close
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={handleShareToken}
               disabled={shareState.isSubmitting || shareState.isLoading}
@@ -867,7 +875,7 @@ export default function TokensPage() {
         onClose={() => setTokenValueModal(null)}
         title={tokenValueModal?.title || 'Runtime Token'}
         footer={
-          <button className="btn btn-primary" onClick={() => setTokenValueModal(null)}>
+          <button type="button" className="btn btn-primary" onClick={() => setTokenValueModal(null)}>
             Done
           </button>
         }
