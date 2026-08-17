@@ -380,7 +380,7 @@ function CredentialModal({ credential, title, onClose }: CredentialModalProps) {
       onClose={onClose}
       title={title}
       footer={
-        <button className="btn btn-primary" onClick={onClose}>
+        <button type="button" className="btn btn-primary" onClick={onClose}>
           I saved the credential
         </button>
       }
@@ -950,10 +950,20 @@ export default function MachineIdentitiesPage() {
         size="wide"
         footer={
           <>
-            <button className="btn btn-secondary" onClick={closeForm} disabled={isSaving}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={closeForm}
+              disabled={isSaving}
+            >
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={() => void handleSave()} disabled={isSaving}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void handleSave()}
+              disabled={isSaving}
+            >
               {isSaving ? 'Saving...' : editingIdentity ? 'Save Changes' : 'Create Identity'}
             </button>
           </>
@@ -984,13 +994,19 @@ export default function MachineIdentitiesPage() {
         footer={
           <>
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={() => setRotatingIdentity(null)}
               disabled={isRotating}
             >
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={() => void handleRotate()} disabled={isRotating}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void handleRotate()}
+              disabled={isRotating}
+            >
               <RotateCw size={14} />
               {isRotating ? 'Rotating...' : 'Rotate Secret'}
             </button>
@@ -1039,8 +1055,20 @@ export default function MachineIdentitiesPage() {
         title={credentialIdentity ? `Add credential to ${credentialIdentity.name}` : 'Add credential'}
         footer={
           <>
-            <button className="btn btn-secondary" onClick={() => setCredentialIdentity(null)} disabled={isCredentialActionBusy}>Cancel</button>
-            <button className="btn btn-primary" onClick={() => void handleCreateCredential()} disabled={isCredentialActionBusy}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setCredentialIdentity(null)}
+              disabled={isCredentialActionBusy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void handleCreateCredential()}
+              disabled={isCredentialActionBusy}
+            >
               {isCredentialActionBusy ? 'Creating...' : 'Create Credential'}
             </button>
           </>
