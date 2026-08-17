@@ -894,10 +894,21 @@ export default function TeamPage() {
         title="Invite Team Member"
         footer={
           <>
-            <button className="btn btn-secondary" onClick={closeInviteModal} disabled={isInviting}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={closeInviteModal}
+              disabled={isInviting}
+            >
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={handleInviteMember} id="send-invite-btn" disabled={isInviting}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleInviteMember}
+              id="send-invite-btn"
+              disabled={isInviting}
+            >
               <UserPlus size={14} />
               {isInviting ? 'Inviting...' : 'Invite Member'}
             </button>
@@ -950,16 +961,42 @@ export default function TeamPage() {
         footer={
           keepActiveConfirm ? (
             <>
-              <button className="btn btn-secondary" onClick={() => setKeepActiveConfirm(false)}>Back</button>
-              <button className="btn btn-danger" onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'keep_active')}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setKeepActiveConfirm(false)}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'keep_active')}
+              >
                 Yes, Keep Tokens Active
               </button>
             </>
           ) : (
             <>
-              <button className="btn btn-secondary" onClick={() => { setRevokeConflict(null); setKeepActiveConfirm(false); }}>Cancel</button>
-              <button className="btn btn-secondary" onClick={() => setKeepActiveConfirm(true)}>Keep Tokens Active</button>
-              <button className="btn btn-danger" onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'revoke_tokens')}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => { setRevokeConflict(null); setKeepActiveConfirm(false); }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setKeepActiveConfirm(true)}
+              >
+                Keep Tokens Active
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => revokeConflict && void attemptRevokeMembers(revokeConflict.members, 'revoke_tokens')}
+              >
                 Revoke Tokens Too
               </button>
             </>
