@@ -31,7 +31,11 @@ const MENU_MAX_HEIGHT = 260;
 const OPTION_HEIGHT = 34;
 
 export function envDotClass(environmentName: string): string {
-  return `env-dot env-dot-${String(environmentName || '').toLowerCase()}`;
+  // Environment names can contain spaces or symbols; keep the class name valid.
+  const slug = String(environmentName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-');
+  return `env-dot env-dot-${slug}`;
 }
 
 export default function Select({
@@ -63,10 +67,11 @@ export default function Select({
       const estimatedHeight = Math.min(options.length * OPTION_HEIGHT + 10, MENU_MAX_HEIGHT);
       const spaceBelow = window.innerHeight - rect.bottom;
       const openUp = spaceBelow < estimatedHeight + 12 && rect.top > estimatedHeight + 12;
+      const width = Math.max(rect.width, 180);
       setMenuStyle({
         position: 'fixed',
-        left: rect.left,
-        width: Math.max(rect.width, 180),
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+        width,
         top: openUp ? rect.top - estimatedHeight - 6 : rect.bottom + 6,
         maxHeight: estimatedHeight,
       });
@@ -117,8 +122,15 @@ export default function Select({
       return;
     }
     const activeIndex = options.findIndex((option) => option.value === value);
-    (optionButtons[activeIndex >= 0 ? activeIndex : 0] ?? optionButtons[0]).focus();
-  }, [isOpen, options, value]);
+    // preventScroll: the portal sits at the end of <body>, so focusing before the
+    // fixed position is applied would scroll the whole page to the bottom.
+    (optionButtons[activeIndex >= 0 ? activeIndex : 0] ?? optionButtons[0]).focus({
+      preventScroll: true,
+    });
+    // Focus only when the menu opens; re-running on parent re-renders would
+    // yank keyboard focus back to the selected option mid-navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleSelect = (nextValue: string) => {
     setIsOpen(false);
@@ -136,6 +148,10 @@ export default function Select({
   };
 
   const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Tab') {
+      setIsOpen(false);
+      return;
+    }
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
       return;
     }
