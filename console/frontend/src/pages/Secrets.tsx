@@ -11,8 +11,6 @@ import {
   Download,
   Check,
   AlertTriangle,
-  Folder,
-  FolderPlus,
   History,
   RotateCcw,
 } from 'lucide-react';
@@ -22,6 +20,7 @@ import CodeBlock from '../components/CodeBlock';
 import ConfirmDialog from '../components/ConfirmDialog';
 import SectionLoader from '../components/SectionLoader';
 import Modal from '../components/Modal';
+import Select, { envDotClass } from '../components/Select';
 import { useAuth } from '../auth/useAuth';
 import {
   bulkDeleteSecrets,
@@ -33,13 +32,8 @@ import {
   pushSecrets,
   revealSecret,
   updateSecret,
-  listSecretFolders,
-  createSecretFolder,
   listProjectSecretTags,
   createProjectSecretTag,
-  listSecretImports,
-  createSecretImport,
-  deleteSecretImport,
   listSecretVersions,
   revealSecretVersion,
   rollbackSecretVersion,
@@ -49,7 +43,7 @@ import { parseDotenv, serializeDotenv } from '../lib/dotenv';
 import { formatDate, formatRelativeTime } from '../lib/format';
 import type { ProjectPageCacheApi } from '../lib/projectPageCache';
 import { getDefaultEnvironmentId } from '../lib/secrets';
-import type { Project, Environment, Secret, ProjectSecret, SecretFolder, ProjectSecretTag, SecretImportRule, SecretVersionItem } from '../types/api';
+import type { Project, Environment, Secret, ProjectSecret, ProjectSecretTag, SecretVersionItem } from '../types/api';
 
 interface OutletContextType {
   currentEnv: string;
@@ -104,11 +98,9 @@ function buildSecretsQueryKey(
   projectId: string,
   environmentIds: string[],
   key: string,
-  path = '/',
-  recursive = false,
   tags: string[] = []
 ): string {
-  return `${projectId}::${environmentIds.join(',')}::${key}::${path}::${recursive}::${tags.slice().sort().join(',')}`;
+  return `${projectId}::${environmentIds.join(',')}::${key}::${tags.slice().sort().join(',')}`;
 }
 
 function mapProjectSecret(secret: ProjectSecret): SecretWithEnv {
@@ -209,12 +201,8 @@ export default function SecretsPage() {
   const initialSecretAccessState: 'enabled' | 'checking' | 'disabled' = 'enabled';
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [currentPath, setCurrentPath] = useState('/');
-  const [includeDescendants, setIncludeDescendants] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [folders, setFolders] = useState<SecretFolder[]>([]);
   const [projectTags, setProjectTags] = useState<ProjectSecretTag[]>([]);
-  const [secretImports, setSecretImports] = useState<SecretImportRule[]>([]);
   const [secrets, setSecrets] = useState<SecretWithEnv[]>(() => initialSecretsEntry?.secrets ?? []);
   const [nextCursor, setNextCursor] = useState<string | null>(() => initialSecretsEntry?.nextCursor ?? null);
   const [isLoading, setIsLoading] = useState(() => !initialSecretsEntry);
@@ -235,11 +223,6 @@ export default function SecretsPage() {
   const [secretPath, setSecretPath] = useState('/');
   const [secretTags, setSecretTags] = useState('');
   const [secretDescription, setSecretDescription] = useState('');
-  const [secretOwner, setSecretOwner] = useState('');
-  const [secretService, setSecretService] = useState('');
-  const [secretRotationDays, setSecretRotationDays] = useState('');
-  const [secretRotateAt, setSecretRotateAt] = useState('');
-  const [secretMetadataJson, setSecretMetadataJson] = useState('{}');
   const [secretEnvironmentId, setSecretEnvironmentId] = useState('');
   const [uploadEnvironmentId, setUploadEnvironmentId] = useState('');
   const [uploadContent, setUploadContent] = useState('');
@@ -282,11 +265,9 @@ export default function SecretsPage() {
       currentProject.id,
       visibleEnvironmentIds,
       appliedSearch,
-      currentPath,
-      includeDescendants,
       selectedTags
     ),
-    [appliedSearch, currentProject.id, currentPath, includeDescendants, selectedTags, visibleEnvironmentIds]
+    [appliedSearch, currentProject.id, selectedTags, visibleEnvironmentIds]
   );
   const isSearchPending = search.trim() !== appliedSearch;
 
@@ -306,54 +287,36 @@ export default function SecretsPage() {
 
   useEffect(() => {
     setSecretAccessState('enabled');
-    setCurrentPath('/');
     setSelectedTags([]);
   }, [currentProject.id]);
 
   useEffect(() => {
     if (!accessToken || visibleEnvironments.length === 0) {
-      setFolders([]);
       setProjectTags([]);
-      setSecretImports([]);
       return undefined;
     }
 
     let active = true;
     const controller = new AbortController();
-    async function loadStructure() {
+    async function loadTags() {
       try {
-        const [folderResponses, tags, imports] = await Promise.all([
-          Promise.all(
-            visibleEnvironments.map((environment) =>
-              listSecretFolders(currentProject.id, environment.id, accessToken!, {
-                path: currentPath,
-                signal: controller.signal,
-              })
-            )
-          ),
-          listProjectSecretTags(currentProject.id, accessToken!, { signal: controller.signal }),
-          listSecretImports(currentProject.id, accessToken!, { signal: controller.signal }),
-        ]);
-        if (!active) return;
-        const byPath = new Map<string, SecretFolder>();
-        folderResponses.flatMap((response) => response.folders).forEach((folder) => {
-          if (!byPath.has(folder.path)) byPath.set(folder.path, folder);
+        const tags = await listProjectSecretTags(currentProject.id, accessToken!, {
+          signal: controller.signal,
         });
-        setFolders([...byPath.values()].sort((left, right) => left.path.localeCompare(right.path)));
+        if (!active) return;
         setProjectTags(tags);
-        setSecretImports(imports);
       } catch (structureError) {
         if (active && !isAbortError(structureError)) {
-          setError((structureError as Error).message || 'Failed to load folders and tags.');
+          setError((structureError as Error).message || 'Failed to load tags.');
         }
       }
     }
-    void loadStructure();
+    void loadTags();
     return () => {
       active = false;
       controller.abort();
     };
-  }, [accessToken, currentPath, currentProject.id, visibleEnvironments]);
+  }, [accessToken, currentProject.id, visibleEnvironments]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -414,8 +377,8 @@ export default function SecretsPage() {
           key: appliedSearch || undefined,
           environmentIds: visibleEnvironmentIds,
           limit: SECRET_PAGE_SIZE,
-          path: currentPath,
-          recursive: includeDescendants,
+          path: '/',
+          recursive: true,
           tags: selectedTags,
         });
 
@@ -468,8 +431,6 @@ export default function SecretsPage() {
     apiConfigError,
     appliedSearch,
     currentProject.id,
-    currentPath,
-    includeDescendants,
     pageCache,
     secretAccessState,
     secrets.length,
@@ -495,17 +456,6 @@ export default function SecretsPage() {
   const defaultEnvironmentId = getDefaultEnvironmentId(currentEnv, environments);
   const cliEnvironmentName =
     currentEnv === 'all' ? environments[0]?.name || 'dev' : currentEnv;
-  const pathBreadcrumbs = useMemo(() => {
-    const segments = currentPath.split('/').filter(Boolean);
-    return [
-      { label: 'Root', path: '/' },
-      ...segments.map((segment, index) => ({
-        label: segment,
-        path: `/${segments.slice(0, index + 1).join('/')}`,
-      })),
-    ];
-  }, [currentPath]);
-
   const syncVisibleSecretState = (nextSecrets: SecretWithEnv[]) => {
     const visibleVersions = new Map(
       nextSecrets.map((secret) => [buildSecretId(secret), secret.version] as const)
@@ -627,33 +577,12 @@ export default function SecretsPage() {
     setSecretKey('');
     setSecretValue('');
     setSecretExpiresAt('');
-    setSecretPath(currentPath);
+    setSecretPath('/');
     setSecretTags(selectedTags.join(', '));
     setSecretDescription('');
-    setSecretOwner('');
-    setSecretService('');
-    setSecretRotationDays('');
-    setSecretRotateAt('');
-    setSecretMetadataJson('{}');
     setSecretEnvironmentId(defaultEnvironmentId);
     setMutationError(null);
     setShowSecretModal(true);
-  };
-
-  const handleCreateFolder = async () => {
-    const environment = visibleEnvironments[0];
-    if (!environment || !accessToken) return;
-    const value = window.prompt('Folder name or absolute path');
-    if (!value?.trim()) return;
-    const path = value.trim().startsWith('/')
-      ? value.trim()
-      : `${currentPath === '/' ? '' : currentPath}/${value.trim()}`;
-    try {
-      const folder = await createSecretFolder(currentProject.id, environment.id, accessToken, { path });
-      setFolders((current) => [...current.filter((item) => item.path !== folder.path), folder]);
-    } catch (folderError) {
-      setError((folderError as Error).message || 'Failed to create folder.');
-    }
   };
 
   const handleCreateTag = async () => {
@@ -666,43 +595,6 @@ export default function SecretsPage() {
         .sort((left, right) => left.name.localeCompare(right.name)));
     } catch (tagError) {
       setError((tagError as Error).message || 'Failed to create tag.');
-    }
-  };
-
-  const handleCreateImport = async () => {
-    if (!accessToken || visibleEnvironments.length === 0) return;
-    const sourceName = window.prompt('Source environment name');
-    if (!sourceName?.trim()) return;
-    const source = environments.find((environment) => environment.name === sourceName.trim());
-    if (!source) {
-      setError(`Environment "${sourceName.trim()}" was not found.`);
-      return;
-    }
-    const sourcePath = window.prompt('Source path', '/') || '/';
-    const targetPath = window.prompt('Target path', currentPath) || currentPath;
-    try {
-      const rule = await createSecretImport(currentProject.id, accessToken, {
-        source_environment_id: source.id,
-        source_path: sourcePath,
-        target_environment_id: visibleEnvironments[0].id,
-        target_path: targetPath,
-        recursive: window.confirm('Include source subfolders recursively?'),
-        priority: 0,
-        enabled: true,
-      });
-      setSecretImports((current) => [...current, rule]);
-    } catch (importError) {
-      setError((importError as Error).message || 'Failed to create import.');
-    }
-  };
-
-  const handleDeleteImport = async (rule: SecretImportRule) => {
-    if (!accessToken || !window.confirm('Delete this secret import?')) return;
-    try {
-      await deleteSecretImport(currentProject.id, rule.id, accessToken);
-      setSecretImports((current) => current.filter((item) => item.id !== rule.id));
-    } catch (importError) {
-      setError((importError as Error).message || 'Failed to delete import.');
     }
   };
 
@@ -791,11 +683,6 @@ export default function SecretsPage() {
       setSecretPath(secret.path);
       setSecretTags(secret.tags.join(', '));
       setSecretDescription(secret.description || '');
-      setSecretOwner(secret.owner || '');
-      setSecretService(secret.service || '');
-      setSecretRotationDays(secret.rotation_interval_days ? String(secret.rotation_interval_days) : '');
-      setSecretRotateAt(toLocalDateTimeInput(secret.rotate_at));
-      setSecretMetadataJson(JSON.stringify(secret.custom_metadata || {}, null, 2));
       setSecretEnvironmentId(secret.environment_id);
       setMutationError(null);
       setShowSecretModal(true);
@@ -895,8 +782,8 @@ export default function SecretsPage() {
       key: appliedSearch || undefined,
       environmentIds: visibleEnvironmentIds,
       limit: SECRET_PAGE_SIZE,
-      path: currentPath,
-      recursive: includeDescendants,
+      path: '/',
+      recursive: true,
       tags: selectedTags,
     });
     const nextSecrets = response.secrets.map(mapProjectSecret);
@@ -925,8 +812,8 @@ export default function SecretsPage() {
         environmentIds: visibleEnvironmentIds,
         limit: SECRET_PAGE_SIZE,
         cursor: nextCursor,
-        path: currentPath,
-        recursive: includeDescendants,
+        path: '/',
+        recursive: true,
         tags: selectedTags,
       });
       const appendedSecrets = response.secrets.map(mapProjectSecret);
@@ -974,18 +861,6 @@ export default function SecretsPage() {
     const normalizedTags = [...new Set(
       secretTags.split(',').map((tag) => tag.trim().toLowerCase()).filter(Boolean)
     )];
-    let customMetadata: Record<string, string>;
-    try {
-      const parsed = JSON.parse(secretMetadataJson || '{}') as Record<string, unknown>;
-      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' ||
-          Object.values(parsed).some((value) => typeof value !== 'string')) {
-        throw new Error('Metadata must be a JSON object containing string values.');
-      }
-      customMetadata = parsed as Record<string, string>;
-    } catch (metadataError) {
-      setMutationError((metadataError as Error).message || 'Custom metadata is invalid JSON.');
-      return;
-    }
 
     if (!secretEnvironmentId) {
       setMutationError('Select an environment.');
@@ -1009,11 +884,6 @@ export default function SecretsPage() {
           path: secretPath || '/',
           tags: normalizedTags,
           description: secretDescription.trim() || null,
-          owner: secretOwner.trim() || null,
-          service: secretService.trim() || null,
-          rotation_interval_days: secretRotationDays ? Number(secretRotationDays) : null,
-          rotate_at: toIsoFromLocalDateTimeInput(secretRotateAt),
-          custom_metadata: customMetadata,
         });
       } else {
         await updateSecret(
@@ -1026,11 +896,6 @@ export default function SecretsPage() {
             expires_at: toIsoFromLocalDateTimeInput(secretExpiresAt),
             tags: normalizedTags,
             description: secretDescription.trim() || null,
-            owner: secretOwner.trim() || null,
-            service: secretService.trim() || null,
-            rotation_interval_days: secretRotationDays ? Number(secretRotationDays) : null,
-            rotate_at: toIsoFromLocalDateTimeInput(secretRotateAt),
-            custom_metadata: customMetadata,
           },
           { path: secretPath }
         );
@@ -1164,7 +1029,7 @@ export default function SecretsPage() {
     try {
       const response = await pushSecrets(currentProject.id, uploadEnvironmentId, accessToken!, {
         secrets: parsedSecrets,
-        path: currentPath,
+        path: '/',
         tags: selectedTags,
       });
 
@@ -1212,8 +1077,8 @@ export default function SecretsPage() {
 
     try {
       const response = await pullSecrets(currentProject.id, exportEnvironmentId, accessToken!, {
-        path: currentPath,
-        recursive: includeDescendants,
+        path: '/',
+        recursive: true,
         tags: selectedTags,
       });
       const targetEnvironment = environments.find(
@@ -1338,50 +1203,6 @@ export default function SecretsPage() {
         </div>
       )}
 
-      <div className="secrets-structure-bar">
-        <div className="secrets-breadcrumbs" aria-label="Secret folder path">
-          <Folder size={15} />
-          {pathBreadcrumbs.map((item) => (
-            <button
-              key={item.path}
-              type="button"
-              className={`btn btn-ghost btn-sm ${item.path === currentPath ? 'is-active' : ''}`}
-              onClick={() => setCurrentPath(item.path)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <div className="secrets-structure-actions">
-          <label className="secrets-recursive-toggle">
-            <input
-              type="checkbox"
-              checked={includeDescendants}
-              onChange={(event) => setIncludeDescendants(event.target.checked)}
-            />
-            Include descendants
-          </label>
-          {canManageSecrets && (
-            <button className="btn btn-secondary btn-sm" onClick={() => void handleCreateFolder()}>
-              <FolderPlus size={14} /> New Folder
-            </button>
-          )}
-        </div>
-      </div>
-      {folders.length > 0 && (
-        <div className="secrets-folder-grid">
-          {folders.map((folder) => (
-            <button
-              key={folder.path}
-              className="secrets-folder-card"
-              onClick={() => setCurrentPath(folder.path)}
-            >
-              <Folder size={15} />
-              <span>{folder.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
       <div className="secrets-tag-filter">
         <span className="text-secondary text-sm">Tags:</span>
         {projectTags.map((tag) => {
@@ -1503,7 +1324,9 @@ export default function SecretsPage() {
                       <td>
                         <code className="secret-key">{secret.key}</code>
                         {secret.is_reference && <span className="badge badge-env">Reference</span>}
-                        <div className="secret-path-label">{secret.path}</div>
+                        {secret.path !== '/' && (
+                          <div className="secret-path-label">{secret.path}</div>
+                        )}
                         {secret.tags.length > 0 && (
                           <div className="secret-tag-list">
                             {secret.tags.map((tag) => <span key={tag} className="badge">{tag}</span>)}
@@ -1610,44 +1433,6 @@ export default function SecretsPage() {
         </div>
       )}
 
-      <div className="card secrets-imports-card">
-        <div className="overview-section-header">
-          <div>
-            <h3>Secret Imports</h3>
-            <p className="text-secondary text-sm">Local secrets override imports; higher priority imports win.</p>
-          </div>
-          {canManageSecrets && (
-            <button className="btn btn-secondary btn-sm" onClick={() => void handleCreateImport()}>
-              <Plus size={14} /> Add Import
-            </button>
-          )}
-        </div>
-        {secretImports.length === 0 ? (
-          <p className="text-secondary text-sm">No imports configured.</p>
-        ) : (
-          <div className="secrets-import-list">
-            {secretImports.map((rule) => {
-              const source = environments.find((environment) => environment.id === rule.source_environment_id);
-              const target = environments.find((environment) => environment.id === rule.target_environment_id);
-              return (
-                <div key={rule.id} className="secrets-import-row">
-                  <span className="mono text-sm">{source?.name || rule.source_environment_id}:{rule.source_path}</span>
-                  <span className="text-secondary">→</span>
-                  <span className="mono text-sm">{target?.name || rule.target_environment_id}:{rule.target_path}</span>
-                  <span className="badge">priority {rule.priority}</span>
-                  {!rule.enabled && <span className="badge">disabled</span>}
-                  {canManageSecrets && (
-                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => void handleDeleteImport(rule)}>
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {/* CLI Hint */}
       {canManageSecrets && (
         <div className="secrets-cli-hint">
@@ -1689,19 +1474,18 @@ export default function SecretsPage() {
       >
         <div className="form-group">
           <label htmlFor="export-secret-env-input">Environment</label>
-          <select
+          <Select
             id="export-secret-env-input"
-            className="input select"
             value={exportEnvironmentId}
-            onChange={(event) => setExportEnvironmentId(event.target.value)}
+            onChange={setExportEnvironmentId}
             disabled={currentEnv !== 'all' || isExporting}
-          >
-            {environments.map((environment) => (
-              <option key={environment.id} value={environment.id}>
-                {environment.name}
-              </option>
-            ))}
-          </select>
+            placeholder="Select an environment"
+            options={environments.map((environment) => ({
+              value: environment.id,
+              label: environment.name,
+              dotClass: envDotClass(environment.name),
+            }))}
+          />
         </div>
         {exportError && (
           <p className="secrets-form-error" role="alert">
@@ -1745,19 +1529,18 @@ export default function SecretsPage() {
       >
         <div className="form-group">
           <label htmlFor="upload-secret-env-input">Environment</label>
-          <select
+          <Select
             id="upload-secret-env-input"
-            className="input select"
             value={uploadEnvironmentId}
-            onChange={(event) => setUploadEnvironmentId(event.target.value)}
+            onChange={setUploadEnvironmentId}
             disabled={currentEnv !== 'all' || isUploading}
-          >
-            {environments.map((environment) => (
-              <option key={environment.id} value={environment.id}>
-                {environment.name}
-              </option>
-            ))}
-          </select>
+            placeholder="Select an environment"
+            options={environments.map((environment) => ({
+              value: environment.id,
+              label: environment.name,
+              dotClass: envDotClass(environment.name),
+            }))}
+          />
         </div>
         <div className="form-group">
           <label htmlFor="upload-dotenv-file-input">Choose .env file</label>
@@ -1838,10 +1621,12 @@ export default function SecretsPage() {
         }
       >
         <div className="form-group">
-          <label htmlFor="secret-key-input">Key</label>
+          <label htmlFor="secret-key-input">Key name</label>
           <input
             id="secret-key-input"
+            name="secret-key-name"
             className="input mono"
+            autoComplete="off"
             placeholder="e.g. OPENAI_API_KEY"
             value={secretKey}
             onChange={(e) => setSecretKey(e.target.value.toUpperCase())}
@@ -1852,23 +1637,14 @@ export default function SecretsPage() {
           <label htmlFor="secret-value-input">Value</label>
           <input
             id="secret-value-input"
+            name="secret-value"
             className="input mono"
             type="password"
+            autoComplete="new-password"
             placeholder="Enter secret value"
             value={secretValue}
             onChange={(e) => setSecretValue(e.target.value)}
             disabled={isSubmitting}
-          />
-        </div>
-        <div className="form-group">
-          <label htmlFor="secret-path-input">Folder Path</label>
-          <input
-            id="secret-path-input"
-            className="input mono"
-            value={secretPath}
-            onChange={(event) => setSecretPath(event.target.value)}
-            disabled={modalMode === 'edit' || isSubmitting}
-            placeholder="/backend"
           />
         </div>
         <div className="form-group">
@@ -1893,45 +1669,20 @@ export default function SecretsPage() {
             rows={2}
           />
         </div>
-        <div className="form-grid-2">
-          <div className="form-group">
-            <label htmlFor="secret-owner-input">Owner</label>
-            <input
-              id="secret-owner-input"
-              className="input"
-              value={secretOwner}
-              onChange={(event) => setSecretOwner(event.target.value)}
-              disabled={isSubmitting}
-              placeholder="platform@example.com"
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="secret-service-input">Service</label>
-            <input
-              id="secret-service-input"
-              className="input"
-              value={secretService}
-              onChange={(event) => setSecretService(event.target.value)}
-              disabled={isSubmitting}
-              placeholder="api"
-            />
-          </div>
-        </div>
         <div className="form-group">
           <label htmlFor="secret-env-input">Environment</label>
-          <select
+          <Select
             id="secret-env-input"
-            className="input select"
             value={secretEnvironmentId}
-            onChange={(event) => setSecretEnvironmentId(event.target.value)}
+            onChange={setSecretEnvironmentId}
             disabled={modalMode === 'edit' || currentEnv !== 'all' || isSubmitting}
-          >
-            {environments.map((environment) => (
-              <option key={environment.id} value={environment.id}>
-                {environment.name}
-              </option>
-            ))}
-          </select>
+            placeholder="Select an environment"
+            options={environments.map((environment) => ({
+              value: environment.id,
+              label: environment.name,
+              dotClass: envDotClass(environment.name),
+            }))}
+          />
         </div>
         <div className="form-group">
           <label htmlFor="secret-expiry-input">Expiration Date</label>
@@ -1944,43 +1695,6 @@ export default function SecretsPage() {
             disabled={isSubmitting}
           />
           <p className="secrets-upload-hint">Leave blank for no expiration.</p>
-        </div>
-        <div className="form-grid-2">
-          <div className="form-group">
-            <label htmlFor="secret-rotation-days-input">Rotation Interval (days)</label>
-            <input
-              id="secret-rotation-days-input"
-              className="input"
-              type="number"
-              min="1"
-              max="3650"
-              value={secretRotationDays}
-              onChange={(event) => setSecretRotationDays(event.target.value)}
-              disabled={isSubmitting}
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="secret-rotate-at-input">Next Rotation</label>
-            <input
-              id="secret-rotate-at-input"
-              className="input"
-              type="datetime-local"
-              value={secretRotateAt}
-              onChange={(event) => setSecretRotateAt(event.target.value)}
-              disabled={isSubmitting}
-            />
-          </div>
-        </div>
-        <div className="form-group">
-          <label htmlFor="secret-metadata-input">Custom Metadata (JSON)</label>
-          <textarea
-            id="secret-metadata-input"
-            className="input mono"
-            value={secretMetadataJson}
-            onChange={(event) => setSecretMetadataJson(event.target.value)}
-            disabled={isSubmitting}
-            rows={3}
-          />
         </div>
         {mutationError && (
           <p className="secrets-form-error" role="alert">
