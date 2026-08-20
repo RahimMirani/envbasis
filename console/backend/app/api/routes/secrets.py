@@ -50,6 +50,7 @@ from app.services.secrets import (
     get_latest_secret_rows,
     get_latest_project_secret_rows,
     get_project_secret_stats,
+    permanently_delete_secret,
     validate_single_secret,
 )
 from app.services.secret_structure import (
@@ -1201,45 +1202,35 @@ def delete_secret(
         operation="delete",
     )
 
-    secret = _create_secret_version(
-        db=db,
-        project_id=project_access.project.id,
+    deleted = permanently_delete_secret(
+        db,
         environment_id=environment.id,
+        path=selected_path,
         key=key,
-        value="",
-        version=latest.version + 1,
-        updated_by=current_user.id,
-        expires_at=latest.expires_at,
-        is_deleted=True,
-        path=latest.path,
-        tags=latest.tags,
-        description=latest.description,
-        owner=latest.owner,
-        service=latest.service,
-        rotation_interval_days=latest.rotation_interval_days,
-        rotate_at=latest.rotate_at,
-        custom_metadata=latest.custom_metadata,
-        is_reference=latest.is_reference,
     )
+    if deleted is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Secret not found.",
+        )
     write_audit_log(
         db,
         project_id=project_access.project.id,
         environment_id=environment.id,
         user_id=current_user.id,
         action="secret.deleted",
-        metadata={"key": key, "path": selected_path, "version": secret.version},
+        metadata=deleted.audit_metadata(),
     )
     webhook_targets = get_webhooks_for_event(db, project_id=project_access.project.id, action="secret.deleted")
-    dispatch_webhooks(webhook_targets, db=db, event="secret.deleted", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata={"key": key, "version": secret.version})
+    dispatch_webhooks(webhook_targets, db=db, event="secret.deleted", project_id=project_access.project.id, environment_id=environment.id, actor_user_id=current_user.id, metadata=deleted.audit_metadata())
     db.commit()
-    db.refresh(secret)
     return SecretDeleteResponse(
         project_id=project_access.project.id,
         environment_id=environment.id,
         key=key,
         path=selected_path,
-        version=secret.version,
-        deleted_at=secret.updated_at,
+        version=deleted.last_version,
+        deleted_at=deleted.deleted_at,
     )
 
 
@@ -1314,28 +1305,19 @@ def bulk_delete_secrets(
     deleted_keys: list[str] = []
     webhook_payloads: list[tuple[uuid.UUID, dict[str, str | int | None]]] = []
     for environment, latest, key in to_delete:
-        deleted = _create_secret_version(
-            db=db,
-            project_id=project_access.project.id,
+        deleted = permanently_delete_secret(
+            db,
             environment_id=environment.id,
-            key=key,
-            value="",
-            version=latest.version + 1,
-            updated_by=current_user.id,
-            expires_at=latest.expires_at,
-            is_deleted=True,
             path=latest.path,
-            tags=latest.tags,
-            description=latest.description,
-            owner=latest.owner,
-            service=latest.service,
-            rotation_interval_days=latest.rotation_interval_days,
-            rotate_at=latest.rotate_at,
-            custom_metadata=latest.custom_metadata,
-            is_reference=latest.is_reference,
+            key=key,
         )
+        if deleted is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f'Secret "{key}" not found in environment "{environment.name}".',
+            )
         deleted_keys.append(f"{environment.name}:{latest.path}:{key}")
-        metadata = {"key": key, "path": latest.path, "version": deleted.version}
+        metadata = deleted.audit_metadata()
         write_audit_log(
             db,
             project_id=project_access.project.id,
