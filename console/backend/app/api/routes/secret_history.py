@@ -42,7 +42,7 @@ from app.services.secret_history import (
     get_secret_versions,
 )
 from app.services.secret_structure import normalize_secret_path, path_is_within
-from app.services.secrets import get_latest_secret_rows
+from app.services.secrets import get_latest_secret_rows, permanently_delete_secret
 
 router = APIRouter(prefix="/projects")
 
@@ -362,25 +362,21 @@ def _recover_environment(
                 is_reference=historical.is_reference,
             )
         elif latest is not None:
-            _create_secret_version(
-                db=db,
-                project_id=project_id,
+            deleted = permanently_delete_secret(
+                db,
                 environment_id=environment_id,
-                key=latest.key,
-                value="",
-                version=next_version,
-                updated_by=current_user.id,
-                is_deleted=True,
                 path=latest.path,
-                tags=latest.tags,
-                description=latest.description,
-                owner=latest.owner,
-                service=latest.service,
-                rotation_interval_days=latest.rotation_interval_days,
-                rotate_at=latest.rotate_at,
-                custom_metadata=latest.custom_metadata,
-                is_reference=latest.is_reference,
+                key=latest.key,
             )
+            if deleted is not None:
+                write_audit_log(
+                    db,
+                    project_id=project_id,
+                    environment_id=environment_id,
+                    user_id=current_user.id,
+                    action="secret.deleted",
+                    metadata={**deleted.audit_metadata(), "via": "recovery"},
+                )
     return changes
 
 
