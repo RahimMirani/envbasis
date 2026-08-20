@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 import uuid
 
 from sqlalchemy import func, select
@@ -298,3 +301,56 @@ def get_project_secret_stats(
             last_activity_at,
         ) in rows
     ]
+
+
+@dataclass(frozen=True)
+class DeletedSecret:
+    key: str
+    path: str
+    last_version: int
+    versions_removed: int
+    deleted_at: datetime
+
+    def audit_metadata(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "path": self.path,
+            "version": self.last_version,
+            "versions_removed": self.versions_removed,
+        }
+
+
+def permanently_delete_secret(
+    db: Session,
+    *,
+    environment_id: uuid.UUID,
+    path: str,
+    key: str,
+) -> DeletedSecret | None:
+    selected_path = normalize_secret_path(path)
+    rows = list(
+        db.scalars(
+            select(Secret)
+            .where(
+                Secret.environment_id == environment_id,
+                Secret.path == selected_path,
+                Secret.key == key,
+            )
+            .order_by(Secret.version.desc())
+            .with_for_update()
+        ).all()
+    )
+    if not rows:
+        return None
+
+    deleted = DeletedSecret(
+        key=key,
+        path=selected_path,
+        last_version=rows[0].version,
+        versions_removed=len(rows),
+        deleted_at=datetime.now(timezone.utc),
+    )
+    for row in rows:
+        db.delete(row)
+    db.flush()
+    return deleted
