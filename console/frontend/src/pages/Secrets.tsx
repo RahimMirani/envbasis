@@ -1758,7 +1758,7 @@ export default function SecretsPage() {
         title="Delete Secret"
         description={
           secretPendingDelete
-            ? `Delete secret "${secretPendingDelete.key}" from ${secretPendingDelete.environment}?`
+            ? `Delete secret "${secretPendingDelete.key}" from ${secretPendingDelete.environment}? This permanently removes the secret and its history.`
             : 'Delete this secret?'
         }
         confirmLabel="Delete Secret"
@@ -1779,7 +1779,7 @@ export default function SecretsPage() {
         title="Delete Selected Secrets"
         description={
           selectedSecrets.length > 0
-            ? `Delete ${selectedSecrets.length} selected secret${selectedSecrets.length !== 1 ? 's' : ''}?`
+            ? `Delete ${selectedSecrets.length} selected secret${selectedSecrets.length !== 1 ? 's' : ''}? This permanently removes each secret and its history.`
             : 'Delete selected secrets?'
         }
         confirmLabel="Delete Selected"
