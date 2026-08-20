@@ -30,6 +30,7 @@ from app.services.audit import write_audit_log
 from app.services.environments import get_project_environment_or_404
 from app.services.project_encryption import decrypt_project_secret, encrypt_project_secret
 from app.services.secret_structure import normalize_secret_path, normalize_secret_tags
+from app.services.secrets import permanently_delete_secret
 
 router = APIRouter(prefix="/projects")
 
@@ -210,14 +211,27 @@ def _is_approver(db: Session, *, user_id: uuid.UUID, step: ApprovalStep) -> bool
 
 def _apply_request(db: Session, request: ApprovalRequest, actor: User) -> None:
     latest = _get_latest_secret_map(db, environment_id=request.environment_id).get((request.path, request.secret_key))
-    next_version = 1 if latest is None else latest.version + 1
     metadata = dict(request.secret_metadata or {})
     if request.operation == "delete":
-        value = ""
-        is_deleted = True
-    else:
-        value = decrypt_project_secret(db, project_id=request.project_id, encrypted_value=request.encrypted_value, encryption_key_version=request.encryption_key_version)
-        is_deleted = False
+        deleted = permanently_delete_secret(
+            db,
+            environment_id=request.environment_id,
+            path=request.path,
+            key=request.secret_key,
+        )
+        if deleted is not None:
+            write_audit_log(
+                db,
+                project_id=request.project_id,
+                environment_id=request.environment_id,
+                user_id=actor.id,
+                action="secret.deleted",
+                metadata={**deleted.audit_metadata(), "via": "approval"},
+            )
+        return
+
+    next_version = 1 if latest is None else latest.version + 1
+    value = decrypt_project_secret(db, project_id=request.project_id, encrypted_value=request.encrypted_value, encryption_key_version=request.encryption_key_version)
     _create_secret_version(
         db=db,
         project_id=request.project_id,
@@ -226,7 +240,6 @@ def _apply_request(db: Session, request: ApprovalRequest, actor: User) -> None:
         value=value,
         version=next_version,
         updated_by=actor.id,
-        is_deleted=is_deleted,
         path=request.path,
         tags=normalize_secret_tags(metadata.get("tags", list(latest.tags or []) if latest else [])),
         description=metadata.get("description", latest.description if latest else None),
