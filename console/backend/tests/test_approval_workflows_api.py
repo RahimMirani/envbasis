@@ -9,7 +9,7 @@ from app.api.routes.approvals import (
     create_approval_policy,
     create_approval_request,
 )
-from app.api.routes.secrets import create_secret, reveal_secret
+from app.api.routes.secrets import create_secret, delete_secret, reveal_secret
 from app.schemas.approval import ApprovalAction, ApprovalPolicyCreate, ApprovalStep, SecretChangeProposal
 from app.schemas.secret import SecretCreateRequest
 from app.models.access_role import AccessRole, AccessRoleAssignment, AccessRolePermission
@@ -196,3 +196,92 @@ def test_role_approvers_comment_reject_cancel_and_self_approval_guard(session_fa
     assert self_denied.value.status_code == 403
     assert "own changes" in self_denied.value.detail
     assert policy.prevent_self_approval is True
+
+
+def test_approved_delete_removes_secret_rows_and_writes_audit(session_factory, seeder) -> None:
+    owner = seeder.user("approval-delete-owner@example.com")
+    author = seeder.user("approval-delete-author@example.com")
+    approver = seeder.user("approval-delete-approver@example.com")
+    project = seeder.project(owner, name="approval-delete-project")
+    environment = seeder.environment(project, name="production")
+    owner_access = _access(project, owner, owner=True)
+    author_access = _access(project, author)
+    approver_access = _access(project, approver)
+
+    with session_factory() as db:
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="STRIPE_KEY", value="sk_live", path="/payments"),
+            project_access=owner_access,
+            current_user=owner,
+            db=db,
+        )
+        create_approval_policy(
+            payload=ApprovalPolicyCreate(
+                name="Delete gate",
+                environment_id=environment.id,
+                path="/payments",
+                actions=["delete"],
+                steps=[ApprovalStep(name="Security", approver_user_ids=[approver.id])],
+            ),
+            project_access=owner_access,
+            current_user=owner,
+            db=db,
+        )
+
+    with session_factory() as db, pytest.raises(HTTPException) as gated:
+        delete_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="STRIPE_KEY",
+            path="/payments",
+            project_access=author_access,
+            current_user=author,
+            db=db,
+        )
+    assert gated.value.status_code == 409
+
+    with session_factory() as db:
+        request = create_approval_request(
+            payload=SecretChangeProposal(
+                environment_id=environment.id,
+                path="/payments",
+                secret_key="STRIPE_KEY",
+                operation="delete",
+            ),
+            project_access=author_access,
+            current_user=author,
+            db=db,
+        )
+        approved = act_on_approval_request(
+            request_id=request.id,
+            payload=ApprovalAction(action="approve"),
+            project_access=approver_access,
+            current_user=approver,
+            db=db,
+        )
+
+    assert approved.status == "approved"
+    assert seeder.secret_versions(environment) == []
+    deleted_logs = [entry for entry in seeder.audit_logs(project) if entry.action == "secret.deleted"]
+    assert len(deleted_logs) == 1
+    assert deleted_logs[0].metadata_json == {
+        "key": "STRIPE_KEY",
+        "path": "/payments",
+        "version": 1,
+        "versions_removed": 1,
+        "via": "approval",
+    }
+
+    with session_factory() as db, pytest.raises(HTTPException) as missing:
+        reveal_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="STRIPE_KEY",
+            path="/payments",
+            project_access=owner_access,
+            current_user=owner,
+            db=db,
+        )
+    assert missing.value.status_code == 404
