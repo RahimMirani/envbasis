@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from fastapi import HTTPException
+import pytest
+
 from app.api.deps import ProjectAccess
 from app.api.routes.secret_history import (
     get_secret_retention,
@@ -14,7 +17,7 @@ from app.api.routes.secret_history import (
     rollback_secret_version,
     update_secret_retention,
 )
-from app.api.routes.secrets import create_secret, pull_secrets, update_secret
+from app.api.routes.secrets import create_secret, delete_secret, pull_secrets, update_secret
 from app.models.secret import Secret
 from app.schemas.secret import SecretCreateRequest, SecretUpdateRequest
 from app.schemas.secret_history import RecoveryRequest, SecretRetentionUpdate
@@ -261,3 +264,92 @@ def test_environment_and_project_point_in_time_recovery(session_factory, seeder)
         )
     assert first.secrets["TOKEN"] == "old"
     assert second.secrets["TOKEN"] == "old"
+
+
+def test_delete_secret_removes_history_and_recovery_can_hard_delete(
+    session_factory,
+    seeder,
+) -> None:
+    owner = seeder.user("history-delete-owner@example.com")
+    project = seeder.project(owner, name="history-delete-project")
+    environment = seeder.environment(project, name="prod")
+    access = _owner_access(project)
+
+    with session_factory() as db:
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="TOKEN", value="v1"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        update_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="TOKEN",
+            payload=SecretUpdateRequest(value="v2"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        delete_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="TOKEN",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    with session_factory() as db, pytest.raises(HTTPException) as missing_history:
+        list_secret_versions(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="TOKEN",
+            include_archived=True,
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+    assert missing_history.value.status_code == 404
+    assert seeder.secret_versions(environment) == []
+
+    with session_factory() as db:
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="LATER_KEY", value="after-snapshot"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        rows = list(db.scalars(select(Secret).where(Secret.key == "LATER_KEY")).all())
+        for row in rows:
+            row.updated_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        db.commit()
+
+    with session_factory() as db:
+        recovered = recover_environment_secrets(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=RecoveryRequest(
+                at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+                dry_run=False,
+            ),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert recovered.changed == 1
+    assert recovered.items[0].action == "delete"
+    assert recovered.items[0].key == "LATER_KEY"
+    assert seeder.secret_versions(environment) == []
+    recovery_deletes = [
+        entry
+        for entry in seeder.audit_logs(project)
+        if entry.action == "secret.deleted" and entry.metadata_json.get("via") == "recovery"
+    ]
+    assert len(recovery_deletes) == 1
+    assert recovery_deletes[0].metadata_json["key"] == "LATER_KEY"
