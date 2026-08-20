@@ -420,7 +420,7 @@ def test_secret_create_update_and_delete_increment_versions(session_factory, see
             db=db,
         )
 
-        assert delete_response.version == 3
+        assert delete_response.version == 2
 
     with session_factory() as db:
         list_response = list_secrets(
@@ -452,12 +452,17 @@ def test_secret_create_update_and_delete_increment_versions(session_factory, see
         else:  # pragma: no cover
             raise AssertionError("Expected reveal_secret to reject deleted secrets")
 
-    versions = seeder.secret_versions(environment)
-    assert [(secret.key, secret.version, secret.is_deleted) for secret in versions] == [
-        ("DATABASE_URL", 1, False),
-        ("DATABASE_URL", 2, False),
-        ("DATABASE_URL", 3, True),
-    ]
+    assert seeder.secret_versions(environment) == []
+    deleted_logs = [entry for entry in seeder.audit_logs(project) if entry.action == "secret.deleted"]
+    assert len(deleted_logs) == 1
+    assert deleted_logs[0].user_id == owner.id
+    assert deleted_logs[0].environment_id == environment.id
+    assert deleted_logs[0].metadata_json == {
+        "key": "DATABASE_URL",
+        "path": "/",
+        "version": 2,
+        "versions_removed": 2,
+    }
 
 
 def test_secret_expiration_can_be_set_updated_and_cleared(session_factory, seeder) -> None:
@@ -536,7 +541,7 @@ def test_secret_expiration_can_be_set_updated_and_cleared(session_factory, seede
     assert reveal_response.expires_at is None
 
 
-def test_bulk_delete_secrets_marks_each_secret_deleted(session_factory, seeder) -> None:
+def test_bulk_delete_secrets_removes_each_secret(session_factory, seeder) -> None:
     owner = seeder.user("owner-bulk-delete@example.com")
     project = seeder.project(owner, name="bulk-delete-project")
     environment = seeder.environment(project, name="prod")
@@ -586,6 +591,11 @@ def test_bulk_delete_secrets_marks_each_secret_deleted(session_factory, seeder) 
         )
 
     assert list_response.secrets == []
+    assert seeder.secret_versions(environment) == []
+    deleted_logs = [entry for entry in seeder.audit_logs(project) if entry.action == "secret.deleted"]
+    assert {entry.metadata_json["key"] for entry in deleted_logs} == {"FIRST_KEY", "SECOND_KEY"}
+    assert all(entry.metadata_json["versions_removed"] == 1 for entry in deleted_logs)
+    assert "secrets.bulk_deleted" in seeder.audit_actions(project)
 
 
 def test_project_secret_list_supports_environment_scope_search_and_pagination(
@@ -669,3 +679,117 @@ def test_project_secret_list_supports_environment_scope_search_and_pagination(
     assert [(item.key, item.environment_name) for item in filtered.secrets] == [
         ("BRAVO_KEY", "staging")
     ]
+
+
+def test_delete_secret_404s_when_missing_and_does_not_audit(session_factory, seeder) -> None:
+    owner = seeder.user("owner-delete-missing@example.com")
+    project = seeder.project(owner, name="missing-delete")
+    environment = seeder.environment(project, name="prod")
+    access = _owner_access(project)
+
+    with session_factory() as db, pytest.raises(HTTPException) as missing:
+        delete_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="MISSING_KEY",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert missing.value.status_code == 404
+    assert "secret.deleted" not in seeder.audit_actions(project)
+
+
+def test_delete_secret_leaves_other_keys_and_allows_recreate(session_factory, seeder) -> None:
+    owner = seeder.user("owner-delete-recreate@example.com")
+    project = seeder.project(owner, name="recreate-project")
+    environment = seeder.environment(project, name="prod")
+    access = _owner_access(project)
+
+    with session_factory() as db:
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="KEEP_ME", value="stay"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="REMOVE_ME", value="gone", path="/api"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        update_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="REMOVE_ME",
+            path="/api",
+            payload=SecretUpdateRequest(value="gone-v2"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    with session_factory() as db:
+        delete_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="REMOVE_ME",
+            path="/api",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    remaining = seeder.secret_versions(environment)
+    assert [(row.key, row.path, row.version) for row in remaining] == [("KEEP_ME", "/", 1)]
+
+    with session_factory() as db, pytest.raises(HTTPException) as second_delete:
+        delete_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="REMOVE_ME",
+            path="/api",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+    assert second_delete.value.status_code == 404
+
+    with session_factory() as db:
+        recreated = create_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            payload=SecretCreateRequest(key="REMOVE_ME", value="fresh", path="/api"),
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        listed = list_secrets(
+            project_id=project.id,
+            environment_id=environment.id,
+            path="/api",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+        revealed = reveal_secret(
+            project_id=project.id,
+            environment_id=environment.id,
+            secret_key="REMOVE_ME",
+            path="/api",
+            project_access=access,
+            current_user=owner,
+            db=db,
+        )
+
+    assert recreated.version == 1
+    assert [item.key for item in listed.secrets] == ["REMOVE_ME"]
+    assert revealed.value == "fresh"
+    assert seeder.audit_actions(project).count("secret.deleted") == 1
+
