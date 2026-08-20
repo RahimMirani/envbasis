@@ -148,15 +148,18 @@ class Seeder:
         with self.session_factory() as db:
             return db.get(RuntimeToken, token_id)
 
-    def audit_actions(self, project: Project) -> list[str]:
+    def audit_logs(self, project: Project) -> list[AuditLog]:
         with self.session_factory() as db:
             return list(
                 db.scalars(
-                    select(AuditLog.action)
+                    select(AuditLog)
                     .where(AuditLog.project_id == project.id)
                     .order_by(AuditLog.created_at.asc())
                 ).all()
             )
+
+    def audit_actions(self, project: Project) -> list[str]:
+        return [entry.action for entry in self.audit_logs(project)]
 
 
 @pytest.fixture
